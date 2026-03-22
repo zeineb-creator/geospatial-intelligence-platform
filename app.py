@@ -27,10 +27,13 @@ st.set_page_config(
 def get_vit():
     return load_vit()
 
-@st.cache_resource(show_spinner="Loading language model...")
+@st.cache_resource(show_spinner="Initializing language model...")
 def get_llm():
-    hf_token = st.secrets.get("HF_TOKEN", os.environ.get("HF_TOKEN", ""))
-    return load_llm(hf_token=hf_token)
+    import os
+    groq_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
+    os.environ["GROQ_API_KEY"] = groq_key
+    from geospatial_platform.llm_engine import load_llm
+    return load_llm()
 
 # ── Helper: index map figure ──────────────────────────────────
 def plot_index_map(array: np.ndarray, title: str, cmap: str) -> plt.Figure:
