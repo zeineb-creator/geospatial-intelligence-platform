@@ -13,6 +13,7 @@ from geospatial_platform.context import InputContext
 
 BAND_CONFIG = {
     "sentinel2": {"red": 3, "green": 2, "blue": 1, "nir": 7, "swir": 10},
+    "sentinel2_6band": {"red": 2, "green": 1, "blue": 0, "nir": 3, "swir": 4},
     "landsat8":  {"red": 3, "green": 2, "blue": 1, "nir": 4,  "swir": 5},
     "generic4":  {"red": 0, "green": 1, "blue": 2, "nir": 3,  "swir": None},
     "rgb":       {"red": 0, "green": 1, "blue": 2, "nir": None, "swir": None},
