@@ -26,6 +26,8 @@ def detect_sensor(n_bands: int) -> str:
         return "rgb"
     elif n_bands == 4:
         return "generic4"
+    elif n_bands == 6:
+        return "sentinel2_6band"
     elif n_bands == 13:
         return "sentinel2"
     elif n_bands >= 7:
