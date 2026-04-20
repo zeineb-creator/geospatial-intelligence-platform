@@ -96,7 +96,16 @@ def run_vision_module(context: InputContext, extractor=None, model=None) -> tupl
     print(f"  Embedding shape : {cls_embedding.shape}")
     print(f"  Embedding norm  : {np.linalg.norm(cls_embedding):.2f}")
 
-    land_cover, anomalies = classify_land_cover(context, cls_embedding)
+    # Use image processor land cover if already computed (more accurate)
+    if context.land_cover and len(context.land_cover) > 0:
+        land_cover = context.land_cover
+        print(f"  Using image processor land cover: {land_cover}")
+    else:
+        land_cover, _ = classify_land_cover(context, cls_embedding)
+
+    # Always compute anomalies from indices
+    _, anomalies = classify_land_cover(context, cls_embedding)
+
     context.land_cover = land_cover
     context.anomalies  = anomalies
 
