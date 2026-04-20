@@ -83,22 +83,17 @@ def compute_ndbi(array: np.ndarray, config: dict) -> np.ndarray | None:
 
 
 def generate_feature_maps(array: np.ndarray, config: dict) -> dict:
-    """
-    Apply thresholds to indices to produce binary masks.
-    Returns dict of masks: vegetation, water, urban.
-    """
     maps = {}
-
     ndvi = compute_ndvi(array, config)
     ndwi = compute_ndwi(array, config)
     ndbi = compute_ndbi(array, config)
 
     if ndvi is not None:
-        maps["vegetation_mask"] = (ndvi > 0.2).astype(np.uint8)
+        maps["vegetation_mask"] = (ndvi > 0.15).astype(np.uint8)
     if ndwi is not None:
-        maps["water_mask"] = (ndwi > 0.0).astype(np.uint8)
+        maps["water_mask"] = (ndwi > 0.05).astype(np.uint8)
     if ndbi is not None:
-        maps["urban_mask"] = (ndbi > 0.0).astype(np.uint8)
+        maps["urban_mask"] = (ndbi > 0.1).astype(np.uint8)
 
     return maps
 
