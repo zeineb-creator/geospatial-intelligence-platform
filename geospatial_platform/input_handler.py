@@ -101,11 +101,40 @@ def validate_image(array: np.ndarray, n_bands: int):
     else:
         print(f"  [WARNING] Unusual band count: {n_bands}. Proceeding with caution.")
 
+def detect_region_context(meta: dict) -> str:
+    """
+    Use CRS and resolution to infer broad geographic context.
+    This gets passed to the LLM for better interpretation.
+    """
+    crs = str(meta.get("crs", "")).upper()
+    res = meta.get("resolution", None)
+
+    context_notes = []
+
+    if "4326" in crs:
+        context_notes.append("Image in geographic coordinates (WGS84)")
+    elif "32" in crs:
+        context_notes.append("Image in UTM projection")
+
+    if res:
+        if isinstance(res, tuple):
+            pixel_size = res[0]
+        else:
+            pixel_size = res
+        if pixel_size < 0.0002:
+            context_notes.append("High resolution imagery (~10-20m/pixel)")
+        elif pixel_size < 0.001:
+            context_notes.append("Medium resolution imagery (~30m/pixel)")
+        else:
+            context_notes.append("Low resolution imagery (>100m/pixel)")
+
+    return " | ".join(context_notes) if context_notes else "Unknown projection"
 
 def build_input_context(
     image_path: str,
     csv_path: str = None,
     question: str = None,
+    context.image_meta["region_context"] = detect_region_context(meta)
 ) -> InputContext:
     """
     Main entry point. Takes file paths, returns a populated InputContext.
