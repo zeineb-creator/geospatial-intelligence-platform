@@ -122,9 +122,9 @@ def compute_cover_percentages(feature_maps: dict, total_pixels: int) -> dict:
 
 def compute_aridity_index(context: InputContext) -> float | None:
     """
-    Simple aridity estimate from CSV if temperature and rainfall available.
-    Aridity index = mean_temp / (annual_rainfall + 1)
-    Higher = more arid.
+    UNESCO aridity index = annual_rainfall / potential_evapotranspiration
+    Simplified: rainfall / (temp_mean * 12 * 0.1 + 1)
+    Scale: <0.2=arid, 0.2-0.5=semi-arid, 0.5-0.65=dry sub-humid, >0.65=humid
     """
     if context.csv_df is None:
         return None
@@ -133,9 +133,33 @@ def compute_aridity_index(context: InputContext) -> float | None:
     rain_cols = [c for c in df.columns if "rain" in c.lower() or "prec" in c.lower()]
     if not temp_cols or not rain_cols:
         return None
-    mean_temp    = float(df[temp_cols[0]].mean())
-    total_rain   = float(df[rain_cols[0]].sum())
-    return round(mean_temp / (total_rain + 1), 4)
+    mean_temp  = float(df[temp_cols[0]].mean())
+    total_rain = float(df[rain_cols[0]].sum())
+    pet = mean_temp * 12 * 0.1 + 1   # simplified PET
+    return round(total_rain / (pet + 1e-6), 4)
+
+def classify_aridity(index: float) -> str:
+    if index < 0.2:   return "Arid"
+    elif index < 0.5: return "Semi-arid"
+    elif index < 0.65:return "Dry sub-humid"
+    else:             return "Humid"
+
+
+def compute_seasonality(context: InputContext) -> str:
+    """Detect rainfall seasonality pattern."""
+    if context.csv_df is None:
+        return "unknown"
+    df = context.csv_df
+    rain_cols = [c for c in df.columns if "rain" in c.lower() or "prec" in c.lower()]
+    if not rain_cols:
+        return "unknown"
+    series = df[rain_cols[0]].dropna()
+    if len(series) < 3 or series.mean() == 0:
+        return "unknown"
+    std_ratio = series.std() / series.mean()
+    if std_ratio > 1.0:   return "strongly seasonal"
+    elif std_ratio > 0.5: return "moderately seasonal"
+    else:                 return "relatively uniform"
 
 
 def process_image(context: InputContext, sensor: str = None) -> InputContext:
