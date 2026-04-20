@@ -28,10 +28,12 @@ def build_prompt(context: InputContext) -> list:
     Construct the full structured prompt from the retrieved context.
     """
     system_message = (
-        "You are a scientific geospatial analyst. "
+        "You are a scientific geospatial analyst specializing in Mediterranean ecosystems. "
         "You interpret satellite imagery and environmental data to produce "
         "accurate, evidence-based reports. "
         "Be precise, use scientific terminology, and ground every claim in the data provided. "
+        "Consider seasonal context when interpreting NDVI values — Mediterranean vegetation "
+        "naturally shows lower NDVI in summer due to drought adaptation. "
         "Structure your response with clear sections."
     )
 
