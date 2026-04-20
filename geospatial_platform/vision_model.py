@@ -70,12 +70,12 @@ def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tup
     anomalies = []
     if context.ndvi is not None:
         mean_ndvi = float(context.ndvi.mean())
-        if mean_ndvi < 0.1:
-            anomalies.append("severe vegetation stress detected (NDVI < 0.1)")
-        elif mean_ndvi < 0.2:
-            anomalies.append("moderate vegetation decline detected (NDVI < 0.2)")
-        if mean_ndvi > 0.6:
-            anomalies.append("high vegetation density detected (NDVI > 0.6)")
+        if mean_ndvi < 0.05:
+            anomalies.append("severe vegetation stress detected (NDVI < 0.05)")
+        elif mean_ndvi < 0.15:
+            anomalies.append("moderate vegetation decline detected (NDVI < 0.15)")
+        if mean_ndvi > 0.5:
+            anomalies.append("high vegetation density detected (NDVI > 0.5)")
     if context.ndwi is not None:
         if float(context.ndwi.mean()) > 0.3:
             anomalies.append("significant water presence detected (NDWI > 0.3)")
