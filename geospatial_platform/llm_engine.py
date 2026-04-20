@@ -5,78 +5,118 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from groq import Groq
 from geospatial_platform.context import InputContext
 
-
 MODEL_NAME = "llama-3.1-8b-instant"
 
 
 def load_llm(hf_token: str = None):
-    """
-    Initialize Groq client.
-    Returns a (None, client) tuple to keep the same interface as before.
-    """
     api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
         raise ValueError("GROQ_API_KEY not found. Add it to Streamlit secrets.")
-
     client = Groq(api_key=api_key)
     print(f"  Groq client initialized. Model: {MODEL_NAME}")
     return None, client
 
 
+def compute_confidence(context: InputContext) -> float:
+    score = 0.0
+    if context.land_cover:                        score += 0.20
+    if context.ndvi is not None:                  score += 0.20
+    if context.ndwi is not None:                  score += 0.15
+    if context.ndbi is not None:                  score += 0.10
+    if context.csv_df is not None:                score += 0.15
+    if context.vegetation_breakdown is not None:  score += 0.10
+    if context.water_ratio is not None:           score += 0.05
+    if context.aridity_index is not None:         score += 0.05
+    # Penalize missing temporal data
+    if context.ndvi_trend is None:                score -= 0.05
+    return round(max(0.0, min(score, 1.0)), 2)
+
+
 def build_prompt(context: InputContext) -> list:
-    """
-    Construct the full structured prompt from the retrieved context.
-    """
     system_message = (
-        "You are a scientific geospatial analyst with expertise in global remote sensing. "
-        "You interpret satellite imagery and environmental data from any region worldwide "
-        "to produce accurate, evidence-based reports. "
-        "Always consider the regional climate context when interpreting spectral indices — "
-        "for example, arid regions naturally have low NDVI, tropical regions have high NDVI, "
-        "and Mediterranean regions show seasonal NDVI variation. "
-        "Be precise, use scientific terminology, and ground every claim in the data provided. "
-        "Never assume a specific region — base all conclusions solely on the data given. "
-        "Structure your response with clear sections."
+        "You are a geospatial scientist specializing in remote sensing and "
+        "environmental analysis with expertise in global ecosystems. "
+        "STRICT RULES: "
+        "Do NOT assume causation without evidence. "
+        "Distinguish clearly between observation, correlation, and hypothesis. "
+        "Use cautious scientific language: 'may indicate', 'suggests', 'potentially'. "
+        "Consider regional climate context — arid regions naturally have low NDVI, "
+        "tropical regions have high NDVI, Mediterranean regions show seasonal variation. "
+        "Base conclusions ONLY on the provided metrics. "
+        "Never invent data that was not provided."
     )
 
-    vision_block = "Visual analysis (satellite image):\n"
-    if context.land_cover:
-        for cls, pct in context.land_cover.items():
-            if pct > 0:
-                vision_block += f"  - {cls}: {pct}% coverage\n"
-    else:
-        vision_block += "  - No land cover data available\n"
+    # Build structured data block
+    lc = context.land_cover or {}
+    vb = context.vegetation_breakdown or {}
 
-    if context.anomalies:
-        vision_block += "\nDetected anomalies:\n"
-        for a in context.anomalies:
-            vision_block += f"  - {a}\n"
+    ndvi_mean  = round(float(context.ndvi.mean()), 3)  if context.ndvi  is not None else "N/A"
+    ndwi_mean  = round(float(context.ndwi.mean()), 3)  if context.ndwi  is not None else "N/A"
+    ndbi_mean  = round(float(context.ndbi.mean()), 3)  if context.ndbi  is not None else "N/A"
+    ndvi_trend = f"ΔNDVI={context.ndvi_trend:.3f}" if context.ndvi_trend is not None else "not available (single image)"
+    water_ratio = f"{context.water_ratio*100:.1f}%" if context.water_ratio is not None else "N/A"
+    aridity    = context.aridity_index if context.aridity_index else "N/A"
+    confidence = compute_confidence(context)
+    context.confidence_score = confidence
 
-    data_block = context.retrieved_context or "No environmental data available."
+    anomalies_text = "\n".join(f"  - {a}" for a in (context.anomalies or [])) or "  None detected"
+    climate_text   = context.retrieved_context or "No climate data provided."
 
     user_message = f"""
-{vision_block}
+SATELLITE IMAGE ANALYSIS DATA:
 
-{data_block}
+Land cover (mutually exclusive):
+  - Water:      {lc.get('water', 0):.2f}%
+  - Vegetation: {lc.get('vegetation', 0):.2f}%
+  - Urban:      {lc.get('urban', 0):.2f}%
+  - Barren:     {lc.get('barren', 0):.2f}%
 
-Based on the satellite image analysis and environmental data above, please provide:
+Vegetation breakdown:
+  - Sparse (NDVI 0.1–0.25):   {vb.get('sparse_pct', 'N/A')}%
+  - Moderate (NDVI 0.25–0.45): {vb.get('moderate_pct', 'N/A')}%
+  - Dense (NDVI > 0.45):       {vb.get('dense_pct', 'N/A')}%
 
-1. LAND COVER SUMMARY
-   Describe the land cover composition and what it indicates about this region.
+Spectral indices:
+  - NDVI mean:  {ndvi_mean} (vegetation health)
+  - NDWI mean:  {ndwi_mean} (water content)
+  - NDBI mean:  {ndbi_mean} (built-up density)
+  - NDVI trend: {ndvi_trend}
+  - Water/flood coverage: {water_ratio}
+  - Aridity index: {aridity}
 
-2. ENVIRONMENTAL ASSESSMENT
-   Analyze the environmental conditions using the data provided.
-   Identify any stress factors, trends, or risks.
+{climate_text}
 
-3. ANOMALY EXPLANATION
-   Explain each detected anomaly with reference to the supporting data.
+Detected anomalies:
+{anomalies_text}
 
-4. ANSWER TO USER QUESTION
-   Question: {context.user_question}
-   Provide a direct, evidence-based answer.
+Confidence score: {confidence*100:.1f}%
 
-5. CONFIDENCE & LIMITATIONS
-   State your confidence level and any limitations due to data availability.
+USER QUESTION: {context.user_question}
+
+Generate a structured scientific report with these sections:
+
+1. LAND COVER ANALYSIS
+   Describe composition and what it indicates. Reference percentages directly.
+
+2. VEGETATION ASSESSMENT
+   Use NDVI mean + breakdown (sparse/moderate/dense). Note trend if available.
+   Be explicit about what NDVI values mean in context.
+
+3. HYDROLOGICAL ASSESSMENT
+   Use NDWI + water ratio. Distinguish between natural water bodies and potential flooding.
+
+4. CLIMATE CONTEXT
+   Interpret temperature, rainfall, humidity trends. Note seasonal patterns.
+
+5. ANOMALY INTERPRETATION
+   Explain each anomaly. Do NOT state causation without evidence. Use "may suggest".
+
+6. ANSWER TO USER QUESTION
+   Direct, evidence-based, cautious answer referencing specific metrics.
+
+7. CONFIDENCE & LIMITATIONS
+   State confidence score ({confidence*100:.1f}%) and specific data gaps.
+   Note if temporal analysis was unavailable.
 """
 
     return [
@@ -87,28 +127,21 @@ Based on the satellite image analysis and environmental data above, please provi
 
 def generate_report(
     context: InputContext,
-    tokenizer,       # unused — kept for interface compatibility
-    llm,             # this is now the Groq client
-    max_new_tokens: int = 600,
+    tokenizer,
+    llm,
+    max_new_tokens: int = 1024,
 ) -> InputContext:
-    """
-    Generate report using Groq API.
-    """
     print("=== LLM Reasoning Engine (Groq) ===")
-
     messages = build_prompt(context)
 
     response = llm.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=1024,
-        temperature=0.3,
+        max_tokens=max_new_tokens,
+        temperature=0.2,
     )
 
-    report = response.choices[0].message.content
-    context.final_report = report
-
+    context.final_report = response.choices[0].message.content
     print("  Report generated via Groq.")
     print("=== LLM complete ===\n")
-
     return context
