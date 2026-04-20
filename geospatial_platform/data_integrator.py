@@ -46,26 +46,26 @@ def extract_anomalies_from_csv(df: pd.DataFrame, category_map: dict) -> list:
         if len(series) < 3:
             continue
 
-        mean = series.mean()
-        std  = series.std()
+        median = series.median()
+        mad    = (series - median).abs().median()
 
-        if std == 0:
+        if mad == 0:
             continue
-
+        
         latest  = series.iloc[-1]
-        z_score = (latest - mean) / std
-
-        if z_score < -1.5:
-            pct_change = round((latest - mean) / abs(mean) * 100, 1)
+        z_score = (latest - median) / (mad + 1e-8)
+        
+        if z_score < -2.0:
+            pct_change = round((latest - median) / abs(median) * 100, 1)
             anomalies.append(
-                f"{category} anomaly: {col} is {abs(pct_change)}% below average "
-                f"(latest={latest:.2f}, mean={mean:.2f})"
+                f"{category} anomaly: {col} is {abs(pct_change)}% below seasonal median "
+                f"(latest={latest:.2f}, median={median:.2f})"
             )
-        elif z_score > 1.5:
-            pct_change = round((latest - mean) / abs(mean) * 100, 1)
+        elif z_score > 2.0:
+            pct_change = round((latest - median) / abs(median) * 100, 1)
             anomalies.append(
-                f"{category} anomaly: {col} is {pct_change}% above average "
-                f"(latest={latest:.2f}, mean={mean:.2f})"
+                f"{category} anomaly: {col} is {pct_change}% above seasonal median "
+                f"(latest={latest:.2f}, median={median:.2f})"
             )
 
     return anomalies
