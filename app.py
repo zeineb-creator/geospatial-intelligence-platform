@@ -155,6 +155,59 @@ def build_full_interpretation(results: dict) -> str:
     return "\n".join(lines)
 
 
+def plot_climate_timeseries(csv_df) -> plt.Figure | None:
+    """Plot rainfall and temperature over months."""
+    if csv_df is None:
+        return None
+    rain_cols = [c for c in csv_df.columns if "rain" in c.lower() or "prec" in c.lower()]
+    temp_cols = [c for c in csv_df.columns if "temp" in c.lower()]
+    if not rain_cols and not temp_cols:
+        return None
+
+    fig, ax1 = plt.subplots(figsize=(8, 3.5))
+    x = range(len(csv_df))
+    labels = csv_df.get("month_name", csv_df.index).tolist() if hasattr(csv_df, "get") else list(x)
+
+    if rain_cols:
+        ax1.bar(x, csv_df[rain_cols[0]], color="#3b8bd4", alpha=0.6, label="Rainfall (mm)")
+        ax1.set_ylabel("Rainfall (mm)", color="#3b8bd4")
+        ax1.tick_params(axis="y", labelcolor="#3b8bd4")
+
+    if temp_cols:
+        ax2 = ax1.twinx()
+        ax2.plot(x, csv_df[temp_cols[0]], color="#c0623d",
+                 linewidth=2, marker="o", markersize=4, label="Temperature (°C)")
+        ax2.set_ylabel("Temperature (°C)", color="#c0623d")
+        ax2.tick_params(axis="y", labelcolor="#c0623d")
+
+    ax1.set_xticks(list(x))
+    ax1.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+    ax1.set_title("Climate — monthly rainfall & temperature", fontsize=11)
+    ax1.spines[["top"]].set_visible(False)
+    plt.tight_layout()
+    return fig
+
+
+def plot_ndvi_histogram(ndvi: np.ndarray) -> plt.Figure | None:
+    """Plot NDVI distribution histogram."""
+    if ndvi is None:
+        return None
+    fig, ax = plt.subplots(figsize=(5, 3))
+    flat = ndvi.flatten()
+    flat = flat[(flat > -1) & (flat < 1)]
+    ax.hist(flat, bins=60, color="#2d9e5f", alpha=0.75, edgecolor="none")
+    ax.axvline(x=float(ndvi.mean()), color="#c0623d",
+               linewidth=1.5, linestyle="--", label=f"Mean={ndvi.mean():.3f}")
+    ax.axvline(x=0.1,  color="#888780", linewidth=1, linestyle=":", label="Sparse threshold (0.1)")
+    ax.axvline(x=0.25, color="#888780", linewidth=1, linestyle="-.", label="Moderate threshold (0.25)")
+    ax.set_xlabel("NDVI value")
+    ax.set_ylabel("Pixel count")
+    ax.set_title("NDVI distribution", fontsize=11)
+    ax.legend(fontsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    return fig
+    
 # ════════════════════════════════════════════════════════════
 # UI LAYOUT
 # ════════════════════════════════════════════════════════════
@@ -299,3 +352,35 @@ if run_button:
 
 else:
     st.info("Upload an image and click **Run analysis** to get started.")
+    # ── Warning banners ───────────────────────────────────────
+flags = results.get("image_meta", {}).get("validator_flags", {})
+if flags.get("single_image_only"):
+    st.warning("⚠ Single image only — vegetation change cannot be assessed. Upload two images for temporal analysis.")
+if not flags.get("has_multiyear_climate"):
+    st.warning("⚠ Single-year climate data — long-term trend analysis is limited.")
+if flags.get("high_seasonality"):
+    st.info("ℹ Strong seasonal rainfall pattern detected — monthly anomalies should be interpreted in seasonal context.")
+if flags.get("flood_detectable"):
+    st.error("🌊 Elevated water signal detected — possible flooding or waterlogging.")
+
+# ── Climate time series ───────────────────────────────────
+if results.get("csv_df") is not None:
+    st.subheader("Climate time series")
+    fig_climate = plot_climate_timeseries(results["csv_df"])
+    if fig_climate:
+        st.pyplot(fig_climate)
+        plt.close(fig_climate)
+
+# ── NDVI histogram ────────────────────────────────────────
+if results.get("ndvi") is not None:
+    st.subheader("NDVI distribution")
+    fig_hist = plot_ndvi_histogram(results["ndvi"])
+    if fig_hist:
+        st.pyplot(fig_hist)
+        plt.close(fig_hist)
+
+# ── Reliability panel ─────────────────────────────────────
+reliability = results.get("image_meta", {}).get("reliability_text", "")
+if reliability:
+    with st.expander("Data reliability assessment"):
+        st.code(reliability)
