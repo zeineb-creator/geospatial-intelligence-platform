@@ -83,17 +83,36 @@ def compute_ndbi(array: np.ndarray, config: dict) -> np.ndarray | None:
 
 
 def generate_feature_maps(array: np.ndarray, config: dict) -> dict:
+    """
+    Compute adaptive thresholds based on image statistics.
+    Works for any region — arid, tropical, coastal, urban, agricultural.
+    """
     maps = {}
     ndvi = compute_ndvi(array, config)
     ndwi = compute_ndwi(array, config)
     ndbi = compute_ndbi(array, config)
 
     if ndvi is not None:
-        maps["vegetation_mask"] = (ndvi > 0.15).astype(np.uint8)
+        # Adaptive: use mean + 0.5*std as threshold
+        ndvi_mean = float(ndvi.mean())
+        ndvi_std  = float(ndvi.std())
+        veg_threshold = max(0.1, ndvi_mean + 0.3 * ndvi_std)
+        maps["vegetation_mask"] = (ndvi > veg_threshold).astype(np.uint8)
+        print(f"  NDVI threshold (adaptive): {veg_threshold:.3f}")
+
     if ndwi is not None:
-        maps["water_mask"] = (ndwi > 0.05).astype(np.uint8)
+        ndwi_mean = float(ndwi.mean())
+        ndwi_std  = float(ndwi.std())
+        water_threshold = max(0.0, ndwi_mean + 0.5 * ndwi_std)
+        maps["water_mask"] = (ndwi > water_threshold).astype(np.uint8)
+        print(f"  NDWI threshold (adaptive): {water_threshold:.3f}")
+
     if ndbi is not None:
-        maps["urban_mask"] = (ndbi > 0.15).astype(np.uint8)
+        ndbi_mean = float(ndbi.mean())
+        ndbi_std  = float(ndbi.std())
+        urban_threshold = max(0.05, ndbi_mean + 0.5 * ndbi_std)
+        maps["urban_mask"] = (ndbi > urban_threshold).astype(np.uint8)
+        print(f"  NDBI threshold (adaptive): {urban_threshold:.3f}")
 
     return maps
 
