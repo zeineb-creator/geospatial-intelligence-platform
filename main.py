@@ -50,17 +50,21 @@ def run_pipeline(
 
     # Package results for the UI
     results = {
-        "land_cover":        ctx.land_cover,
-        "anomalies":         ctx.anomalies,
-        "ndvi":              ctx.ndvi,
-        "ndwi":              ctx.ndwi,
-        "image_array":       ctx.image_array,
-        "final_report":      ctx.final_report,
-        "retrieved_context": ctx.retrieved_context,
-        "image_format":      ctx.image_format,
-        "n_bands":           ctx.n_bands,
-        "image_meta":        ctx.image_meta,
-        "user_question":     ctx.user_question,
+        "land_cover":           ctx.land_cover,
+        "anomalies":            ctx.anomalies,
+        "ndvi":                 ctx.ndvi,
+        "ndwi":                 ctx.ndwi,
+        "image_array":          ctx.image_array,
+        "final_report":         ctx.final_report,
+        "retrieved_context":    ctx.retrieved_context,
+        "image_format":         ctx.image_format,
+        "n_bands":              ctx.n_bands,
+        "image_meta":           ctx.image_meta,
+        "user_question":        ctx.user_question,
+        "vegetation_breakdown": ctx.vegetation_breakdown,
+        "water_ratio":          ctx.water_ratio,
+        "aridity_index":        ctx.aridity_index,
+        "confidence_score":     ctx.confidence_score,
     }
 
     return results, extractor, vit_model
