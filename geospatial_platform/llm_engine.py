@@ -97,7 +97,7 @@ def generate_report(
     response = llm.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=max_new_tokens,
+        max_tokens=1024,
         temperature=0.3,
     )
 
