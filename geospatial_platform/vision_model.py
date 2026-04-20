@@ -51,11 +51,14 @@ def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tup
     total_pixels = context.image_array.shape[1] * context.image_array.shape[2]
 
     if context.ndvi is not None:
-        scores["vegetation"] = round(float((context.ndvi > 0.2).sum()) / total_pixels * 100, 2)
+        scores["vegetation"] = round(
+            float((context.ndvi > 0.1).sum()) / total_pixels * 100, 2)
     if context.ndwi is not None:
-        scores["water"] = round(float((context.ndwi > 0.0).sum()) / total_pixels * 100, 2)
+        scores["water"] = round(
+            float((context.ndwi > 0.0).sum()) / total_pixels * 100, 2)
     if context.ndbi is not None:
-        scores["urban"] = round(float((context.ndbi > 0.0).sum()) / total_pixels * 100, 2)
+        scores["urban"] = round(
+            float((context.ndbi > 0.05).sum()) / total_pixels * 100, 2)
 
     if context.ndvi is None:
         embedding_norm = float(np.linalg.norm(cls_embedding))
@@ -70,19 +73,38 @@ def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tup
     anomalies = []
     if context.ndvi is not None:
         mean_ndvi = float(context.ndvi.mean())
+        std_ndvi  = float(context.ndvi.std())
+
+        # Adaptive anomaly: based on image's own distribution
+        low_threshold  = mean_ndvi - std_ndvi
+        high_threshold = mean_ndvi + std_ndvi
+
         if mean_ndvi < 0.05:
-            anomalies.append("severe vegetation stress detected (NDVI < 0.05)")
+            anomalies.append(
+                f"severe vegetation stress detected (mean NDVI={mean_ndvi:.3f})")
         elif mean_ndvi < 0.15:
-            anomalies.append("moderate vegetation decline detected (NDVI < 0.15)")
-        if mean_ndvi > 0.5:
-            anomalies.append("high vegetation density detected (NDVI > 0.5)")
+            anomalies.append(
+                f"moderate vegetation decline detected (mean NDVI={mean_ndvi:.3f})")
+        elif mean_ndvi > 0.5:
+            anomalies.append(
+                f"high vegetation density detected (mean NDVI={mean_ndvi:.3f})")
+
     if context.ndwi is not None:
-        if float(context.ndwi.mean()) > 0.3:
-            anomalies.append("significant water presence detected (NDWI > 0.3)")
+        mean_ndwi = float(context.ndwi.mean())
+        if mean_ndwi > 0.3:
+            anomalies.append(
+                f"significant water presence detected (mean NDWI={mean_ndwi:.3f})")
+        elif mean_ndwi < -0.3:
+            anomalies.append(
+                f"very low water content detected (mean NDWI={mean_ndwi:.3f})")
+
+    if context.ndbi is not None:
+        mean_ndbi = float(context.ndbi.mean())
+        if mean_ndbi > 0.2:
+            anomalies.append(
+                f"high built-up density detected (mean NDBI={mean_ndbi:.3f})")
 
     return scores, anomalies
-
-
 def run_vision_module(context: InputContext, extractor=None, model=None) -> tuple:
     print("=== Vision Module ===")
     if extractor is None or model is None:
