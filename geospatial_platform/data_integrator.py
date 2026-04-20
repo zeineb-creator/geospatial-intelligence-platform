@@ -9,6 +9,16 @@ from geospatial_platform.context import InputContext
 
 # Keywords that map column names to environmental categories
 CATEGORY_KEYWORDS = {
+    EXCLUDED_COLUMNS = ["month", "year", "month_name", "date", "doy"]
+
+    def extract_anomalies_from_csv(df: pd.DataFrame, category_map: dict) -> list:
+        anomalies = []
+        for col, category in category_map.items():
+            if col.lower() in EXCLUDED_COLUMNS:
+                continue
+            if category == "other":
+                continue
+        # ... rest of function stays the same
     "rainfall":    ["rain", "rainfall", "precipitation", "precip"],
     "temperature": ["temp", "temperature", "celsius", "fahrenheit"],
     "humidity":    ["humid", "humidity", "moisture"],
