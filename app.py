@@ -21,10 +21,7 @@ st.set_page_config(
     page_icon="🛰",
     layout="wide",
 )
-if st.button("Clear cache & restart", type="secondary"):
-    st.cache_resource.clear()
-    st.rerun()
-    
+
 # ── Model loading (cached — runs once per session) ────────────
 @st.cache_resource(show_spinner="Loading vision model...")
 def get_vit():
@@ -156,6 +153,9 @@ with st.sidebar:
     run_button = st.button("Run analysis", type="primary", use_container_width=True)
 
     st.divider()
+    if st.button("Clear cache & restart", type="secondary"):
+        st.cache_resource.clear()
+        st.rerun()
     st.caption("Models load once and stay cached for the session.")
 
 
