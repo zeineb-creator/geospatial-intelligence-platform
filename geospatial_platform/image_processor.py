@@ -21,19 +21,19 @@ BAND_CONFIG = {
 
 
 def detect_sensor(n_bands: int) -> str:
-    """Guess sensor type from band count."""
     if n_bands == 3:
         return "rgb"
     elif n_bands == 4:
         return "generic4"
     elif n_bands == 6:
         return "sentinel2_6band"
-    elif n_bands == 13:
-        return "sentinel2"
-    elif n_bands >= 7:
+    elif n_bands == 7:
         return "landsat8"
+    elif n_bands >= 13:
+        return "sentinel2"
     else:
-        return "rgb"
+        # For any other band count, use first 4 bands as generic
+        return "generic4"
 
 
 def normalize_band(band: np.ndarray) -> np.ndarray:
