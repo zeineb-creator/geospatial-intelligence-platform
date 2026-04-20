@@ -93,20 +93,40 @@ def generate_feature_maps(array: np.ndarray, config: dict) -> dict:
     if ndwi is not None:
         maps["water_mask"] = (ndwi > 0.05).astype(np.uint8)
     if ndbi is not None:
-        maps["urban_mask"] = (ndbi > 0.1).astype(np.uint8)
+        maps["urban_mask"] = (ndbi > 0.15).astype(np.uint8)
 
     return maps
 
 
 def compute_cover_percentages(feature_maps: dict, total_pixels: int) -> dict:
     """
-    Convert binary masks to percentage coverage.
+    Compute mutually exclusive land cover percentages.
+    Priority: water > vegetation > urban > barren
     """
+    h = w = int(total_pixels ** 0.5)
+    classified = np.zeros((h, w), dtype=np.uint8)
+
+    priority = ["water_mask", "vegetation_mask", "urban_mask"]
+    labels   = {"water_mask": "water", "vegetation_mask": "vegetation", "urban_mask": "urban"}
+    codes    = {"water_mask": 1, "vegetation_mask": 2, "urban_mask": 3}
+
+    for mask_name in priority:
+        if mask_name in feature_maps:
+            mask = feature_maps[mask_name]
+            if mask.shape == classified.shape:
+                classified[mask.astype(bool) & (classified == 0)] = codes[mask_name]
+
     percentages = {}
-    for name, mask in feature_maps.items():
-        label = name.replace("_mask", "")
-        pct = round(float(mask.sum()) / total_pixels * 100, 2)
+    for mask_name in priority:
+        label = labels[mask_name]
+        code  = codes[mask_name]
+        pct   = round(float((classified == code).sum()) / total_pixels * 100, 2)
         percentages[label] = pct
+
+    # Barren = unclassified
+    barren_pct = round(float((classified == 0).sum()) / total_pixels * 100, 2)
+    percentages["barren"] = barren_pct
+
     return percentages
 
 
