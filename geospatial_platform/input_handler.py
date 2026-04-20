@@ -5,7 +5,6 @@ from PIL import Image
 from dataclasses import dataclass
 import os
 import sys
-sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
@@ -134,7 +133,6 @@ def build_input_context(
     image_path: str,
     csv_path: str = None,
     question: str = None,
-    context.image_meta["region_context"] = detect_region_context(meta)
 ) -> InputContext:
     """
     Main entry point. Takes file paths, returns a populated InputContext.
@@ -167,14 +165,15 @@ def build_input_context(
 
     # --- Build context ---
     context = InputContext(
-        image_array=array,
-        image_meta=meta,
-        image_format=fmt,
-        n_bands=n_bands,
-        csv_df=csv_df,
-        csv_summary=csv_summary,
-        user_question=user_question,
-    )
+    image_array=array,
+    image_meta=meta,
+    image_format=fmt,
+    n_bands=n_bands,
+    csv_df=csv_df,
+    csv_summary=csv_summary,
+    user_question=user_question,
+)
+    context.image_meta["region_context"] = detect_region_context(meta)
 
     print("=== InputContext ready ===\n")
     return context
