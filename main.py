@@ -65,6 +65,7 @@ def run_pipeline(
         "water_ratio":          ctx.water_ratio,
         "aridity_index":        ctx.aridity_index,
         "confidence_score":     ctx.confidence_score,
+        "csv_df": ctx.csv_df,
     }
 
     return results, extractor, vit_model
