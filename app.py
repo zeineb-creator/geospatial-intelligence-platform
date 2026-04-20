@@ -153,9 +153,6 @@ with st.sidebar:
     run_button = st.button("Run analysis", type="primary", use_container_width=True)
 
     st.divider()
-    if st.button("Clear cache & restart", type="secondary"):
-        st.cache_resource.clear()
-        st.rerun()
     st.caption("Models load once and stay cached for the session.")
 
 
