@@ -90,16 +90,43 @@ def build_full_interpretation(results: dict) -> str:
     lines.append(f"  Bands      : {results['n_bands']}")
     lines.append(f"  Resolution : {meta.get('resolution', 'unknown')}")
     lines.append(f"  CRS        : {meta.get('crs', 'unknown')}")
-    lines.append(f"  Dimensions : {meta.get('width')} x {meta.get('height')} px\n")
+    lines.append(f"  Dimensions : {meta.get('width')} x {meta.get('height')} px")
+    lines.append(f"  Context    : {meta.get('region_context', 'unknown')}\n")
 
     lines.append("── LAND COVER ───────────────────────────────────────────")
     if results["land_cover"]:
         for cls, pct in results["land_cover"].items():
-            if pct > 0:
-                lines.append(f"  {cls:<15}: {pct:.2f}%")
-    else:
-        lines.append("  Not available.")
+            lines.append(f"  {cls:<15}: {pct:.2f}%")
     lines.append("")
+
+    if results.get("vegetation_breakdown"):
+        lines.append("── VEGETATION BREAKDOWN ─────────────────────────────────")
+        vb = results["vegetation_breakdown"]
+        lines.append(f"  Sparse   (NDVI 0.10–0.25) : {vb.get('sparse_pct', 0):.2f}%")
+        lines.append(f"  Moderate (NDVI 0.25–0.45) : {vb.get('moderate_pct', 0):.2f}%")
+        lines.append(f"  Dense    (NDVI > 0.45)    : {vb.get('dense_pct', 0):.2f}%")
+        lines.append("")
+
+    if results.get("water_ratio") is not None:
+        lines.append("── HYDROLOGICAL INDICATORS ──────────────────────────────")
+        lines.append(f"  Water/flood coverage : {results['water_ratio']*100:.2f}%")
+        if results["water_ratio"] > 0.25:
+            lines.append("  ⚠ Possible flooding detected")
+        lines.append("")
+
+    if results.get("aridity_index") is not None:
+        lines.append("── ARIDITY INDEX ────────────────────────────────────────")
+        ai = results["aridity_index"]
+        if ai < 0.05:
+            label = "Humid"
+        elif ai < 0.2:
+            label = "Sub-humid"
+        elif ai < 0.5:
+            label = "Semi-arid"
+        else:
+            label = "Arid"
+        lines.append(f"  Index : {ai:.3f} → {label}")
+        lines.append("")
 
     lines.append("── DETECTED ANOMALIES ───────────────────────────────────")
     if results["anomalies"]:
@@ -108,6 +135,13 @@ def build_full_interpretation(results: dict) -> str:
     else:
         lines.append("  No anomalies detected.")
     lines.append("")
+
+    if results.get("confidence_score") is not None:
+        lines.append("── CONFIDENCE SCORE ─────────────────────────────────────")
+        score = results["confidence_score"]
+        bar   = "█" * int(score * 20) + "░" * (20 - int(score * 20))
+        lines.append(f"  {bar} {score*100:.1f}%")
+        lines.append("")
 
     lines.append("── RETRIEVED ENVIRONMENTAL CONTEXT ─────────────────────")
     lines.append(results["retrieved_context"] or "  No environmental data provided.")
