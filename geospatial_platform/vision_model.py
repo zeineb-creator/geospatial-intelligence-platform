@@ -29,10 +29,15 @@ def load_vit(model_name: str = "google/vit-base-patch16-224"):
 def prepare_image_for_vit(image_array: np.ndarray, ndvi: np.ndarray = None) -> np.ndarray:
     rgb = image_array[:3]
     rgb = np.transpose(rgb, (1, 2, 0))
+    # Replace NaN with 0 before clipping
+    rgb = np.nan_to_num(rgb, nan=0.0, posinf=1.0, neginf=0.0)
     rgb = np.clip(rgb, 0, 1)
+
     if ndvi is not None:
-        ndvi_norm = (ndvi - ndvi.min()) / (ndvi.max() - ndvi.min() + 1e-8)
+        ndvi_clean = np.nan_to_num(ndvi, nan=0.0)
+        ndvi_norm  = (ndvi_clean - ndvi_clean.min()) / (ndvi_clean.max() - ndvi_clean.min() + 1e-8)
         rgb[:, :, 1] = 0.7 * rgb[:, :, 1] + 0.3 * ndvi_norm
+
     return (rgb * 255).astype(np.uint8)
 
 
