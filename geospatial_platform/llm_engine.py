@@ -19,17 +19,30 @@ def load_llm(hf_token: str = None):
 
 def compute_confidence(context: InputContext) -> float:
     score = 0.0
-    if context.land_cover:                        score += 0.20
-    if context.ndvi is not None:                  score += 0.20
-    if context.ndwi is not None:                  score += 0.15
-    if context.ndbi is not None:                  score += 0.10
-    if context.csv_df is not None:                score += 0.15
-    if context.vegetation_breakdown is not None:  score += 0.10
+
+    # Base scores from available data
+    if context.land_cover:                        score += 0.15
+    if context.ndvi is not None:                  score += 0.15
+    if context.ndwi is not None:                  score += 0.10
+    if context.ndbi is not None:                  score += 0.08
+    if context.csv_df is not None:                score += 0.12
+    if context.vegetation_breakdown is not None:  score += 0.08
     if context.water_ratio is not None:           score += 0.05
     if context.aridity_index is not None:         score += 0.05
-    # Penalize missing temporal data
-    if context.ndvi_trend is None:                score -= 0.05
-    return round(max(0.0, min(score, 1.0)), 2)
+
+    # Penalties for missing critical data
+    if context.ndvi_previous is None:             score -= 0.15  # no temporal
+    if context.csv_df is None:                    score -= 0.10  # no climate
+    if context.n_bands < 4:                       score -= 0.08  # RGB only
+
+    # Multi-year climate bonus
+    if context.csv_df is not None:
+        if "year" in context.csv_df.columns:
+            years = context.csv_df["year"].nunique()
+            if years > 1:
+                score += 0.10 * min(years / 5, 1.0)
+
+    return round(max(0.10, min(score, 0.85)), 2)  # cap at 85%
 
 
 def build_prompt(context: InputContext) -> list:
