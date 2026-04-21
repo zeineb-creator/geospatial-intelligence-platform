@@ -23,9 +23,10 @@ class InputContext:
     ndwi: Optional[np.ndarray] = None
     ndbi: Optional[np.ndarray] = None
 
-    # Temporal (only when second image provided)
+    # Temporal analysis (populated when second image provided)
     ndvi_previous: Optional[np.ndarray] = None
     ndvi_trend: Optional[float] = None
+    ndvi_trend_map: Optional[np.ndarray] = None  # pixel-level change map
 
     # Derived metrics
     water_ratio: Optional[float] = None
