@@ -350,37 +350,37 @@ if run_button:
     if csv_path:
         os.unlink(csv_path)
 
-else:
+    else:
     st.info("Upload an image and click **Run analysis** to get started.")
     # ── Warning banners ───────────────────────────────────────
-flags = results.get("image_meta", {}).get("validator_flags", {})
-if flags.get("single_image_only"):
-    st.warning("⚠ Single image only — vegetation change cannot be assessed. Upload two images for temporal analysis.")
-if not flags.get("has_multiyear_climate"):
-    st.warning("⚠ Single-year climate data — long-term trend analysis is limited.")
-if flags.get("high_seasonality"):
-    st.info("ℹ Strong seasonal rainfall pattern detected — monthly anomalies should be interpreted in seasonal context.")
-if flags.get("flood_detectable"):
-    st.error("🌊 Elevated water signal detected — possible flooding or waterlogging.")
-
-# ── Climate time series ───────────────────────────────────
-if results.get("csv_df") is not None:
-    st.subheader("Climate time series")
-    fig_climate = plot_climate_timeseries(results["csv_df"])
-    if fig_climate:
-        st.pyplot(fig_climate)
-        plt.close(fig_climate)
-
-# ── NDVI histogram ────────────────────────────────────────
-if results.get("ndvi") is not None:
-    st.subheader("NDVI distribution")
-    fig_hist = plot_ndvi_histogram(results["ndvi"])
-    if fig_hist:
-        st.pyplot(fig_hist)
-        plt.close(fig_hist)
-
-# ── Reliability panel ─────────────────────────────────────
-reliability = results.get("image_meta", {}).get("reliability_text", "")
-if reliability:
-    with st.expander("Data reliability assessment"):
-        st.code(reliability)
+    flags = results.get("image_meta", {}).get("validator_flags", {})
+    if flags.get("single_image_only"):
+        st.warning("⚠ Single image only — vegetation change cannot be assessed. Upload two images for temporal analysis.")
+    if not flags.get("has_multiyear_climate"):
+        st.warning("⚠ Single-year climate data — long-term trend analysis is limited.")
+    if flags.get("high_seasonality"):
+        st.info("ℹ Strong seasonal rainfall pattern detected — monthly anomalies should be interpreted in seasonal context.")
+    if flags.get("flood_detectable"):
+        st.error("🌊 Elevated water signal detected — possible flooding or waterlogging.")
+    
+    # ── Climate time series ───────────────────────────────────
+    if results.get("csv_df") is not None:
+        st.subheader("Climate time series")
+        fig_climate = plot_climate_timeseries(results["csv_df"])
+        if fig_climate:
+            st.pyplot(fig_climate)
+            plt.close(fig_climate)
+    
+    # ── NDVI histogram ────────────────────────────────────────
+    if results.get("ndvi") is not None:
+        st.subheader("NDVI distribution")
+        fig_hist = plot_ndvi_histogram(results["ndvi"])
+        if fig_hist:
+            st.pyplot(fig_hist)
+            plt.close(fig_hist)
+    
+    # ── Reliability panel ─────────────────────────────────────
+    reliability = results.get("image_meta", {}).get("reliability_text", "")
+    if reliability:
+        with st.expander("Data reliability assessment"):
+            st.code(reliability)
