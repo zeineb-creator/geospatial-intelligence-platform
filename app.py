@@ -117,14 +117,11 @@ def build_full_interpretation(results: dict) -> str:
     if results.get("aridity_index") is not None:
         lines.append("── ARIDITY INDEX ────────────────────────────────────────")
         ai = results["aridity_index"]
-        if ai < 0.05:
-            label = "Humid"
-        elif ai < 0.2:
-            label = "Sub-humid"
-        elif ai < 0.5:
-            label = "Semi-arid"
-        else:
-            label = "Arid"
+        if ai < 0.05:   label = "Hyper-arid"
+        elif ai < 0.2:  label = "Arid"
+        elif ai < 0.5:  label = "Semi-arid"
+        elif ai < 0.65: label = "Dry sub-humid"
+        else:           label = "Humid"
         lines.append(f"  Index : {ai:.3f} → {label}")
         lines.append("")
 
