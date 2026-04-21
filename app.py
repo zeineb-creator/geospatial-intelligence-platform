@@ -116,12 +116,17 @@ def plot_climate_timeseries(csv_df) -> plt.Figure | None:
 def plot_ndvi_histogram(ndvi: np.ndarray) -> plt.Figure | None:
     if ndvi is None:
         return None
-    fig, ax = plt.subplots(figsize=(5, 3))
     flat = ndvi.flatten()
-    flat = flat[(flat > -1) & (flat < 1)]
+    flat = flat[(flat > -1) & (flat < 1) & ~np.isnan(flat)]  # ← remove NaN
+    if len(flat) == 0:
+        return None
+
+    mean_val = float(np.nanmean(ndvi[~np.isnan(ndvi)])) if not np.all(np.isnan(ndvi)) else 0
+
+    fig, ax = plt.subplots(figsize=(5, 3))
     ax.hist(flat, bins=60, color="#2d9e5f", alpha=0.75, edgecolor="none")
-    ax.axvline(x=float(ndvi.mean()), color="#c0623d", linewidth=1.5,
-               linestyle="--", label=f"Mean={ndvi.mean():.3f}")
+    ax.axvline(x=mean_val, color="#c0623d", linewidth=1.5,
+               linestyle="--", label=f"Mean={mean_val:.3f}")
     ax.axvline(x=0.1,  color="#888780", linewidth=1, linestyle=":",  label="Sparse (0.10)")
     ax.axvline(x=0.25, color="#888780", linewidth=1, linestyle="-.", label="Moderate (0.25)")
     ax.axvline(x=0.45, color="#444441", linewidth=1, linestyle="-.", label="Dense (0.45)")
@@ -185,11 +190,13 @@ def build_full_interpretation(results: dict) -> str:
         lines.append("")
 
     if results.get("ndvi_trend") is not None:
-        lines.append("── TEMPORAL NDVI ANALYSIS ───────────────────────────────")
+        import math
         trend = results["ndvi_trend"]
-        direction = "improvement" if trend > 0 else "decline"
-        lines.append(f"  ΔNDVI (mean) : {trend:+.4f} → {direction}")
-        lines.append("")
+        if not math.isnan(trend):
+            lines.append("── TEMPORAL NDVI ANALYSIS ───────────────────────────────")
+            direction = "improvement" if trend > 0 else "decline"
+            lines.append(f"  ΔNDVI (mean) : {trend:+.4f} → {direction}")
+            lines.append("")
 
     if results.get("water_ratio") is not None:
         lines.append("── HYDROLOGICAL INDICATORS ──────────────────────────────")
