@@ -122,9 +122,11 @@ def compute_cover_percentages(feature_maps: dict, total_pixels: int) -> dict:
 
 def compute_aridity_index(context: InputContext) -> float | None:
     """
-    UNESCO aridity index = annual_rainfall / potential_evapotranspiration
-    Simplified: rainfall / (temp_mean * 12 * 0.1 + 1)
-    Scale: <0.2=arid, 0.2-0.5=semi-arid, 0.5-0.65=dry sub-humid, >0.65=humid
+    UNEP aridity index = P / PET
+    P   = annual precipitation (mm)
+    PET = potential evapotranspiration (mm) ≈ 58.93 * mean_temp (Thornthwaite simplified)
+    Scale: <0.05=hyper-arid, 0.05-0.2=arid, 0.2-0.5=semi-arid,
+           0.5-0.65=dry sub-humid, >0.65=humid
     """
     if context.csv_df is None:
         return None
@@ -133,13 +135,19 @@ def compute_aridity_index(context: InputContext) -> float | None:
     rain_cols = [c for c in df.columns if "rain" in c.lower() or "prec" in c.lower()]
     if not temp_cols or not rain_cols:
         return None
+
     mean_temp  = float(df[temp_cols[0]].mean())
     total_rain = float(df[rain_cols[0]].sum())
-    pet = mean_temp * 12 * 0.1 + 1   # simplified PET
-    return round(total_rain / (pet + 1e-6), 4)
+
+    # Thornthwaite simplified PET (mm/year)
+    pet = max(1.0, 58.93 * mean_temp)
+    ai  = total_rain / pet
+    return round(ai, 4)
+
 
 def classify_aridity(index: float) -> str:
-    if index < 0.2:   return "Arid"
+    if index < 0.05:  return "Hyper-arid"
+    elif index < 0.2: return "Arid"
     elif index < 0.5: return "Semi-arid"
     elif index < 0.65:return "Dry sub-humid"
     else:             return "Humid"
