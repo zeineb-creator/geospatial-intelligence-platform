@@ -28,7 +28,6 @@ def detect_column_category(col_name: str) -> str:
             return category
     return "other"
 
-
 def extract_anomalies_from_csv(df: pd.DataFrame, category_map: dict) -> list:
     anomalies = []
 
@@ -46,30 +45,40 @@ def extract_anomalies_from_csv(df: pd.DataFrame, category_map: dict) -> list:
         if len(series) < 3:
             continue
 
+        # Use median and MAD — robust to seasonal outliers
         median = series.median()
         mad    = (series - median).abs().median()
 
         if mad == 0:
             continue
-        
+
+        # Check seasonality — if highly seasonal, skip anomaly flagging
+        if median > 0:
+            std_ratio = series.std() / series.mean()
+            if std_ratio > 0.8 and category == "rainfall":
+                anomalies.append(
+                    f"{category} note: {col} shows strong seasonality "
+                    f"(CV={std_ratio:.2f}) — monthly comparisons may be misleading"
+                )
+                continue
+
         latest  = series.iloc[-1]
-        z_score = (latest - median) / (mad + 1e-8)
-        
-        if z_score < -2.0:
-            pct_change = round((latest - median) / abs(median) * 100, 1)
+        z_score = (latest - median) / (mad * 1.4826 + 1e-8)
+
+        if z_score < -2.5:
+            pct = round((latest - median) / abs(median) * 100, 1)
             anomalies.append(
-                f"{category} anomaly: {col} is {abs(pct_change)}% below seasonal median "
+                f"{category} deficit: {col} is {abs(pct):.1f}% below seasonal median "
                 f"(latest={latest:.2f}, median={median:.2f})"
             )
-        elif z_score > 2.0:
-            pct_change = round((latest - median) / abs(median) * 100, 1)
+        elif z_score > 2.5:
+            pct = round((latest - median) / abs(median) * 100, 1)
             anomalies.append(
-                f"{category} anomaly: {col} is {pct_change}% above seasonal median "
+                f"{category} surplus: {col} is {pct:.1f}% above seasonal median "
                 f"(latest={latest:.2f}, median={median:.2f})"
             )
 
     return anomalies
-
 
 def build_environmental_summary(df: pd.DataFrame, category_map: dict) -> dict:
     summary = {}
