@@ -11,22 +11,17 @@ from geospatial_platform.rag import run_rag
 from geospatial_platform.llm_engine import generate_report, load_llm
 
 
-def compute_temporal_ndvi(ctx_now, ctx_past) -> float:
-    """
-    Compute NDVI trend between two images.
-    Returns mean ΔNDVI (negative = decline, positive = improvement).
-    """
+def compute_temporal_ndvi(ctx_now, ctx_past):
     if ctx_now.ndvi is None or ctx_past.ndvi is None:
-        return None
+        return None                                      # ← explicit None
 
-    # Resize past NDVI to match current if needed
     ndvi_now  = ctx_now.ndvi
     ndvi_past = ctx_past.ndvi
 
     if ndvi_now.shape != ndvi_past.shape:
         from PIL import Image as PILImage
         ndvi_past_img = PILImage.fromarray(ndvi_past)
-        ndvi_past     = np.array(
+        ndvi_past = np.array(
             ndvi_past_img.resize(
                 (ndvi_now.shape[1], ndvi_now.shape[0]),
                 PILImage.BILINEAR
@@ -66,22 +61,21 @@ def run_pipeline(
         ctx.ndvi_previous = ctx_past.ndvi
 
         if ctx.ndvi is not None and ctx_past.ndvi is not None:
-            trend_val, trend_map   = compute_temporal_ndvi(ctx, ctx_past)
-            ctx.ndvi_trend         = trend_val
-            ctx.ndvi_trend_map     = trend_map
-            print(f"  ΔNDVI (mean): {trend_val:.4f}")
-            if trend_val < -0.05:
-                ctx.anomalies.append(
-                    f"vegetation decline detected (ΔNDVI={trend_val:.3f})"
-                )
-            elif trend_val < -0.02:
-                ctx.anomalies.append(
-                    f"slight vegetation decrease (ΔNDVI={trend_val:.3f})"
-                )
-            elif trend_val > 0.05:
-                ctx.anomalies.append(
-                    f"vegetation improvement detected (ΔNDVI={trend_val:.3f})"
-                )
+            temporal_result = compute_temporal_ndvi(ctx, ctx_past)
+            if temporal_result is not None:              # ← add this check
+                trend_val, trend_map   = temporal_result
+                ctx.ndvi_trend         = trend_val
+                ctx.ndvi_trend_map     = trend_map
+                print(f"  ΔNDVI (mean): {trend_val:.4f}")
+                if trend_val < -0.05:
+                    ctx.anomalies.append(
+                        f"vegetation decline detected (ΔNDVI={trend_val:.3f})")
+                elif trend_val < -0.02:
+                    ctx.anomalies.append(
+                        f"slight vegetation decrease (ΔNDVI={trend_val:.3f})")
+                elif trend_val > 0.05:
+                    ctx.anomalies.append(
+                        f"vegetation improvement detected (ΔNDVI={trend_val:.3f})")
         print("=== Temporal analysis complete ===\n")
 
     # Step 4 — Vision module
