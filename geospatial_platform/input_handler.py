@@ -14,7 +14,52 @@ try:
 except ImportError:
     RASTERIO_AVAILABLE = False
 
+def get_region_name(meta: dict) -> str:
+    """
+    Attempt reverse geocoding from image bounds using Nominatim.
+    Falls back gracefully if no internet or coordinates unavailable.
+    """
+    try:
+        import urllib.request
+        import json
 
+        crs = str(meta.get("crs", ""))
+        if "4326" not in crs:
+            return "Unknown region"
+
+        # Get center coordinates from transform
+        transform = meta.get("transform", None)
+        width     = meta.get("width", 0)
+        height    = meta.get("height", 0)
+
+        if transform is None:
+            return "Unknown region"
+
+        # Compute center lat/lon
+        import rasterio.transform as rt
+        lon, lat = rt.xy(transform, height // 2, width // 2)
+
+        url = (
+            f"https://nominatim.openstreetmap.org/reverse"
+            f"?lat={lat}&lon={lon}&format=json"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "GeoAI-Platform/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read())
+
+        address = data.get("address", {})
+        parts = []
+        for key in ["city", "town", "village", "county", "state", "country"]:
+            if key in address and address[key]:
+                parts.append(address[key])
+                if len(parts) == 2:
+                    break
+
+        return ", ".join(parts) if parts else "Unknown region"
+
+    except Exception:
+        return "Unknown region"
+        
 def load_image(image_path: str) -> tuple[np.ndarray, dict, str, int]:
     """
     Load a satellite image from disk.
@@ -26,16 +71,20 @@ def load_image(image_path: str) -> tuple[np.ndarray, dict, str, int]:
         if not RASTERIO_AVAILABLE:
             raise ImportError("rasterio is required for GeoTIFF files.")
         with rasterio.open(image_path) as src:
-            array = src.read().astype(np.float32)   # (bands, H, W)
+            array = src.read().astype(np.float32)
             meta = {
                 "resolution": src.res,
-                "crs": str(src.crs),
-                "width": src.width,
-                "height": src.height,
-                "dtype": str(src.dtypes[0]),
-                "n_bands": src.count,
+                "crs":        str(src.crs),
+                "width":      src.width,
+                "height":     src.height,
+                "dtype":      str(src.dtypes[0]),
+                "n_bands":    src.count,
+                "transform":  src.transform,
             }
-        return array, meta, "geotiff", src.count
+        region = get_region_name(meta)
+        meta["region_name"] = region
+        print(f"  Region detected: {region}")
+        return array, meta, "geotiff", meta["n_bands"]
 
     elif ext in ['.png', '.jpg', '.jpeg']:
         img = Image.open(image_path).convert('RGB')
