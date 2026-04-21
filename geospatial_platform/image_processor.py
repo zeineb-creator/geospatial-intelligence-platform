@@ -275,5 +275,14 @@ def process_image(context: InputContext, sensor: str = None) -> InputContext:
         print(f"  Aridity index: {context.aridity_index:.3f}")
 
     context.image_array = normalized
+    # Ecosystem classification
+    ndvi_mean_val = float(context.ndvi.mean()) if context.ndvi is not None else None
+    context.image_meta["ecosystem"] = classify_ecosystem(
+        context.land_cover,
+        context.aridity_index,
+        ndvi_mean_val
+    )
+    print(f"  Ecosystem: {context.image_meta['ecosystem']}")
+
     print("=== Image processing complete ===\n")
     return context
