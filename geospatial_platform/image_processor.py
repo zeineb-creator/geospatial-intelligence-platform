@@ -170,6 +170,60 @@ def compute_seasonality(context: InputContext) -> str:
     else:                 return "relatively uniform"
 
 
+def classify_ecosystem(land_cover: dict, aridity_index: float = None,
+                        ndvi_mean: float = None) -> str:
+    """
+    Classify ecosystem type from land cover ratios and indices.
+    Returns a human-readable ecosystem label.
+    """
+    water      = land_cover.get("water", 0)
+    vegetation = land_cover.get("vegetation", 0)
+    urban      = land_cover.get("urban", 0)
+    barren     = land_cover.get("barren", 0)
+
+    # Water-dominated
+    if water > 50:
+        return "Aquatic / Wetland"
+
+    # Urban-dominated
+    if urban > 40:
+        return "Urban / Built-up area"
+
+    # Highly vegetated
+    if vegetation > 60:
+        if ndvi_mean and ndvi_mean > 0.5:
+            return "Dense forest / Tropical vegetation"
+        return "Agricultural land / Grassland"
+
+    # Mixed with aridity context
+    if aridity_index is not None:
+        if aridity_index < 0.05:
+            return "Hyper-arid desert"
+        elif aridity_index < 0.2:
+            if barren > 40:
+                return "Arid shrubland / Desert"
+            return "Arid rangeland"
+        elif aridity_index < 0.5:
+            if vegetation > 25:
+                return "Semi-arid savanna / Mediterranean scrubland"
+            return "Semi-arid barren land"
+        elif aridity_index < 0.65:
+            return "Dry sub-humid mixed land"
+        else:
+            if vegetation > 40:
+                return "Humid forest / Dense vegetation"
+            return "Humid mixed landscape"
+
+    # Fallback from land cover only
+    if barren > 50:
+        return "Barren / Sparsely vegetated land"
+    if vegetation > 30 and urban > 15:
+        return "Peri-urban mixed landscape"
+    if vegetation > 40:
+        return "Mixed agricultural / Natural vegetation"
+
+    return "Mixed / Unclassified landscape"
+                            
 def process_image(context: InputContext, sensor: str = None) -> InputContext:
     print("=== Image Processor ===")
 
