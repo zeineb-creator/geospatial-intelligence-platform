@@ -1,14 +1,14 @@
+import os
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import numpy as np
 from geospatial_platform.input_handler import build_input_context
 from geospatial_platform.image_processor import process_image
 from geospatial_platform.vision_model import run_vision_module, load_vit
 from geospatial_platform.data_integrator import run_data_integrator
 from geospatial_platform.rag import run_rag
 from geospatial_platform.llm_engine import generate_report, load_llm
-import numpy as np
-import os
 
 
 def compute_temporal_ndvi(ctx_now, ctx_past) -> float:
