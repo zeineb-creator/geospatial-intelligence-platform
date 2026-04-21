@@ -28,41 +28,67 @@ def normalize_band(band: np.ndarray) -> np.ndarray:
         return np.zeros_like(band, dtype=np.float32)
     return ((band - min_val) / (max_val - min_val)).astype(np.float32)
 
+NODATA_THRESHOLD = -0.15  # GEE Landsat scaled nodata ≈ -0.2
+
+def mask_nodata(array: np.ndarray) -> np.ndarray:
+    """Replace nodata pixels (-0.2 from GEE scaling) with NaN."""
+    masked = array.astype(np.float32).copy()
+    masked[masked <= NODATA_THRESHOLD] = np.nan
+    return masked
+
 
 def safe_index(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    denom = a + b
-    result = np.where(denom == 0, 0.0, (a - b) / denom)
+    """Compute (a-b)/(a+b) safely, ignoring NaN and zero denominators."""
+    denom  = a + b
+    with np.errstate(invalid="ignore", divide="ignore"):
+        result = np.where(
+            (np.abs(denom) < 1e-10) | np.isnan(denom),
+            np.nan,
+            (a - b) / denom
+        )
     return np.clip(result, -1.0, 1.0).astype(np.float32)
 
 
 def compute_ndvi(array, config):
     if config["nir"] is None: return None
-    return safe_index(normalize_band(array[config["nir"]]),
-                      normalize_band(array[config["red"]]))
+    nir = mask_nodata(normalize_band(array[config["nir"]], prescaled=True))
+    red = mask_nodata(normalize_band(array[config["red"]], prescaled=True))
+    return safe_index(nir, red)
 
 
 def compute_ndwi(array, config):
     if config["nir"] is None: return None
-    return safe_index(normalize_band(array[config["green"]]),
-                      normalize_band(array[config["nir"]]))
+    green = mask_nodata(normalize_band(array[config["green"]], prescaled=True))
+    nir   = mask_nodata(normalize_band(array[config["nir"]],   prescaled=True))
+    return safe_index(green, nir)
 
 
 def compute_ndbi(array, config):
     if config["swir"] is None or config["nir"] is None: return None
-    return safe_index(normalize_band(array[config["swir"]]),
-                      normalize_band(array[config["nir"]]))
-
+    swir = mask_nodata(normalize_band(array[config["swir"]], prescaled=True))
+    nir  = mask_nodata(normalize_band(array[config["nir"]],  prescaled=True))
+    return safe_index(swir, nir)
 
 def compute_vegetation_breakdown(ndvi: np.ndarray, total_pixels: int) -> dict:
-    """Classify vegetation into sparse / moderate / dense."""
-    sparse   = ((ndvi > 0.1)  & (ndvi <= 0.25)).sum()
-    moderate = ((ndvi > 0.25) & (ndvi <= 0.45)).sum()
-    dense    = (ndvi > 0.45).sum()
+    valid = ndvi[~np.isnan(ndvi)]
+    if len(valid) == 0:
+        return {"sparse_pct": 0, "moderate_pct": 0, "dense_pct": 0}
+    sparse   = ((valid > 0.1)  & (valid <= 0.25)).sum()
+    moderate = ((valid > 0.25) & (valid <= 0.45)).sum()
+    dense    = (valid > 0.45).sum()
     return {
         "sparse_pct":   round(float(sparse)   / total_pixels * 100, 2),
         "moderate_pct": round(float(moderate) / total_pixels * 100, 2),
         "dense_pct":    round(float(dense)    / total_pixels * 100, 2),
     }
+
+
+def detect_flood(ndwi: np.ndarray, total_pixels: int) -> float:
+    valid = ndwi[~np.isnan(ndwi)]
+    if len(valid) == 0:
+        return 0.0
+    water_pixels = (valid > 0.3).sum()
+    return round(float(water_pixels) / total_pixels, 4)
 
 
 def detect_flood(ndwi: np.ndarray, total_pixels: int) -> float:
@@ -72,25 +98,33 @@ def detect_flood(ndwi: np.ndarray, total_pixels: int) -> float:
 
 
 def generate_feature_maps(array: np.ndarray, config: dict) -> dict:
-    """Adaptive thresholds based on image statistics."""
     maps = {}
     ndvi = compute_ndvi(array, config)
     ndwi = compute_ndwi(array, config)
     ndbi = compute_ndbi(array, config)
 
     if ndvi is not None:
-        veg_threshold = max(0.1, float(ndvi.mean()) + 0.3 * float(ndvi.std()))
-        maps["vegetation_mask"] = (ndvi > veg_threshold).astype(np.uint8)
+        valid_ndvi = np.where(np.isnan(ndvi), 0, ndvi)
+        veg_mean   = float(np.nanmean(ndvi)) if not np.all(np.isnan(ndvi)) else 0
+        veg_std    = float(np.nanstd(ndvi))  if not np.all(np.isnan(ndvi)) else 0
+        veg_threshold = max(0.1, veg_mean + 0.3 * veg_std)
+        maps["vegetation_mask"] = (valid_ndvi > veg_threshold).astype(np.uint8)
         print(f"  NDVI adaptive threshold: {veg_threshold:.3f}")
 
     if ndwi is not None:
-        water_threshold = max(0.0, float(ndwi.mean()) + 0.5 * float(ndwi.std()))
-        maps["water_mask"] = (ndwi > water_threshold).astype(np.uint8)
+        valid_ndwi  = np.where(np.isnan(ndwi), 0, ndwi)
+        water_mean  = float(np.nanmean(ndwi)) if not np.all(np.isnan(ndwi)) else 0
+        water_std   = float(np.nanstd(ndwi))  if not np.all(np.isnan(ndwi)) else 0
+        water_threshold = max(0.0, water_mean + 0.5 * water_std)
+        maps["water_mask"] = (valid_ndwi > water_threshold).astype(np.uint8)
         print(f"  NDWI adaptive threshold: {water_threshold:.3f}")
 
     if ndbi is not None:
-        urban_threshold = max(0.05, float(ndbi.mean()) + 0.5 * float(ndbi.std()))
-        maps["urban_mask"] = (ndbi > urban_threshold).astype(np.uint8)
+        valid_ndbi  = np.where(np.isnan(ndbi), 0, ndbi)
+        urban_mean  = float(np.nanmean(ndbi)) if not np.all(np.isnan(ndbi)) else 0
+        urban_std   = float(np.nanstd(ndbi))  if not np.all(np.isnan(ndbi)) else 0
+        urban_threshold = max(0.05, urban_mean + 0.5 * urban_std)
+        maps["urban_mask"] = (valid_ndbi > urban_threshold).astype(np.uint8)
         print(f"  NDBI adaptive threshold: {urban_threshold:.3f}")
 
     return maps
@@ -242,11 +276,19 @@ def process_image(context: InputContext, sensor: str = None) -> InputContext:
     context.ndwi = compute_ndwi(array, config)
     context.ndbi = compute_ndbi(array, config)
 
-    for name, val in [("NDVI", context.ndvi), ("NDWI", context.ndwi), ("NDBI", context.ndbi)]:
-        if val is not None:
-            print(f"  {name}: min={val.min():.3f}, mean={val.mean():.3f}, max={val.max():.3f}")
+    for name, val in [("NDVI", context.ndvi),
+                  ("NDWI", context.ndwi),
+                  ("NDBI", context.ndbi)]:
+    if val is not None:
+        valid = val[~np.isnan(val)]
+        if len(valid) > 0:
+            print(f"  {name}: min={valid.min():.3f}, "
+                  f"mean={valid.mean():.3f}, max={valid.max():.3f}, "
+                  f"valid_pixels={len(valid)}")
         else:
-            print(f"  {name}: skipped (missing required bands)")
+            print(f"  {name}: all NaN — possible nodata issue")
+    else:
+        print(f"  {name}: skipped")
 
     total_pixels = array.shape[1] * array.shape[2]
     feature_maps = generate_feature_maps(array, config)
