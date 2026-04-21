@@ -63,9 +63,9 @@ def build_prompt(context: InputContext) -> list:
     lc = context.land_cover or {}
     vb = context.vegetation_breakdown or {}
 
-    ndvi_mean  = round(float(context.ndvi.mean()), 3) if context.ndvi is not None else "N/A"
-    ndwi_mean  = round(float(context.ndwi.mean()), 3) if context.ndwi is not None else "N/A"
-    ndbi_mean  = round(float(context.ndbi.mean()), 3) if context.ndbi is not None else "N/A"
+    ndvi_mean = round(float(np.nanmean(context.ndvi[~np.isnan(context.ndvi)])), 3) if context.ndvi is not None and not np.all(np.isnan(context.ndvi)) else "N/A"
+    ndwi_mean = round(float(np.nanmean(context.ndwi[~np.isnan(context.ndwi)])), 3) if context.ndwi is not None and not np.all(np.isnan(context.ndwi)) else "N/A"
+    ndbi_mean = round(float(np.nanmean(context.ndbi[~np.isnan(context.ndbi)])), 3) if context.ndbi is not None and not np.all(np.isnan(context.ndbi)) else "N/A"
     water_ratio = f"{context.water_ratio*100:.1f}%" if context.water_ratio is not None else "N/A"
     aridity    = context.aridity_index if context.aridity_index else "N/A"
 
