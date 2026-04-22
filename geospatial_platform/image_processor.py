@@ -239,32 +239,34 @@ def classify_ecosystem(land_cover: dict, aridity_index=None,
     urban      = land_cover.get("urban", 0)
     barren     = land_cover.get("barren", 0)
 
-    # Water-dominated
+    # Water-dominated — check first
     if water > 50:
         return "Aquatic / Wetland"
+
+    # Coastal Mediterranean — water + some vegetation + urban
+    if water > 15 and vegetation > 5:
+        return "Mediterranean coastal mixed landscape"
 
     # Urban-dominated
     if urban > 40:
         return "Urban / Built-up area"
 
-    # Coastal mixed (water + vegetation + urban — typical Mediterranean)
-    if water > 10 and vegetation > 20 and urban > 10:
-        if aridity_index is not None and aridity_index < 0.5:
-            return "Mediterranean coastal mixed landscape"
-        return "Coastal mixed landscape"
-
-    # Dense vegetation
+    # Well-vegetated
     if vegetation > 60:
         if ndvi_mean and ndvi_mean > 0.5:
             return "Dense forest / Tropical vegetation"
         return "Agricultural land / Grassland"
 
-    # Use aridity index with land cover context
+    # Peri-urban mixed
+    if vegetation > 20 and urban > 10:
+        return "Peri-urban mixed landscape"
+
+    # Use aridity with land cover context
     if aridity_index is not None:
         if aridity_index < 0.05:
             return "Hyper-arid desert"
         elif aridity_index < 0.2:
-            if vegetation > 20:
+            if vegetation > 15 or water > 10:
                 return "Semi-arid Mediterranean scrubland"
             return "Arid shrubland / Desert"
         elif aridity_index < 0.5:
@@ -277,11 +279,8 @@ def classify_ecosystem(land_cover: dict, aridity_index=None,
             return "Humid forest / Dense vegetation" if vegetation > 40 \
                    else "Humid mixed landscape"
 
-    # Fallback
     if barren > 60:
         return "Barren / Sparsely vegetated land"
-    if vegetation > 30 and urban > 15:
-        return "Peri-urban mixed landscape"
     if vegetation > 40:
         return "Mixed agricultural / Natural vegetation"
     return "Mixed / Unclassified landscape"
