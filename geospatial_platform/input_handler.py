@@ -15,54 +15,62 @@ except ImportError:
     RASTERIO_AVAILABLE = False
 
 def get_region_name(meta: dict) -> str:
-    """
-    Attempt reverse geocoding from image bounds using Nominatim.
-    Falls back gracefully if no internet or coordinates unavailable.
-    """
     try:
         import urllib.request
         import json
+        import rasterio.transform as rt
 
-        crs = str(meta.get("crs", ""))
-        if "4326" not in crs:
-            return "Unknown region"
-
-        # Get center coordinates from transform
         transform = meta.get("transform", None)
         width     = meta.get("width", 0)
         height    = meta.get("height", 0)
 
-        if transform is None:
+        if transform is None or width == 0 or height == 0:
             return "Unknown region"
 
-        # Compute center lat/lon
-        import rasterio.transform as rt
-        lon, lat = rt.xy(transform, height // 2, width // 2)
+        row = height // 2
+        col = width  // 2
+        x, y = rt.xy(transform, row, col)
+        lat, lon = float(y), float(x)
+
+        if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+            return f"Lat {lat:.3f}, Lon {lon:.3f}"
+
+        print(f"  Geocoding: lat={lat:.4f}, lon={lon:.4f}")
 
         url = (
             f"https://nominatim.openstreetmap.org/reverse"
-            f"?lat={lat}&lon={lon}&format=json"
-            f"&accept-language=en&namedetails=0"
+            f"?lat={lat}&lon={lon}&format=json&accept-language=en"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "GeoAI-Platform/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read())
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "GeoAI-Platform/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read())
 
-        # Force English country names
-        for key in ["city", "town", "village", "municipality", "county", "state", "country"]:
+        address = data.get("address", {})
+        parts   = []
+
+        for key in ["city", "town", "village", "municipality",
+                    "county", "state", "country"]:
             val = address.get(key, "")
-            if val and not any(ord(c) > 127 for c in val):  # skip non-ASCII (Arabic)
-                parts.append(val)
-                if len(parts) == 2:
-                    break
+            if val and len(val) > 0:
+                # Skip if primarily non-Latin characters
+                latin_ratio = sum(1 for c in val if ord(c) < 256) / len(val)
+                if latin_ratio > 0.5:
+                    parts.append(val)
+                    if len(parts) == 2:
+                        break
 
-        # If still empty after filtering, use coordinates
-        if not parts:
-            return f"Lat {lat:.3f}, Lon {lon:.3f}"
+        if parts:
+            return ", ".join(parts)
 
-        return ", ".join(parts) if parts else "Unknown region"
+        # Fallback: use country + coordinates
+        country = address.get("country", "")
+        if country:
+            return f"{country} ({lat:.2f}°N, {lon:.2f}°E)"
+        return f"{lat:.3f}°N, {lon:.3f}°E"
 
-    except Exception:
+    except Exception as e:
+        print(f"  [INFO] Geocoding failed: {e}")
         return "Unknown region"
         
 def load_image(image_path: str) -> tuple[np.ndarray, dict, str, int]:
