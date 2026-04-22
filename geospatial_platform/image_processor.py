@@ -4,7 +4,7 @@ sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
-NODATA_THRESHOLD = -0.15
+NODATA_THRESHOLD = -0.19
 
 BAND_CONFIG = {
     "sentinel2":       {"red": 3,  "green": 2, "blue": 1, "nir": 7,  "swir": 10},
@@ -239,7 +239,8 @@ def process_image(context: InputContext, sensor: str = None) -> InputContext:
     n_bands = context.n_bands
     sensor  = sensor or detect_sensor(n_bands)
     config  = BAND_CONFIG[sensor]
-
+    print(f"  Array range : min={array.min():.4f}, max={array.max():.4f}, "f"mean={array.mean():.4f}")
+    print(f"  Nodata pixels: {(array <= NODATA_THRESHOLD).sum()} / {array.size}")
     print(f"  Sensor type : {sensor}")
     print(f"  Band config : {config}")
 
