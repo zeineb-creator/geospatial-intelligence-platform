@@ -33,9 +33,10 @@ def validate_inputs(context: InputContext) -> dict:
     if context.csv_df is not None:
         df = context.csv_df
 
-        # Check years
-        if "year" in df.columns:
-            years = df["year"].nunique()
+        # Check years — handle both 'year' and 'YEAR' column names
+        year_col = next((c for c in df.columns if c.lower() == "year"), None)
+        if year_col:
+            years = df[year_col].nunique()
             flags["climate_years"]         = int(years)
             flags["has_multiyear_climate"] = years > 1
         else:
