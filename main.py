@@ -12,30 +12,32 @@ from geospatial_platform.llm_engine import generate_report, load_llm
 
 
 def compute_temporal_ndvi(ctx_now, ctx_past):
-    """
-    Compute NDVI trend between two images.
-    Returns (mean_delta, delta_map) or None if not computable.
-    """
     try:
         if ctx_now.ndvi is None or ctx_past.ndvi is None:
             return None
 
-        ndvi_now  = ctx_now.ndvi
-        ndvi_past = ctx_past.ndvi
+        ndvi_now  = ctx_now.ndvi.astype(np.float32)
+        ndvi_past = ctx_past.ndvi.astype(np.float32)
 
-        # Resize if shapes differ
         if ndvi_now.shape != ndvi_past.shape:
-            from PIL import Image as PILImage
-            pil_past  = PILImage.fromarray(ndvi_past)
-            ndvi_past = np.array(
-                pil_past.resize(
-                    (ndvi_now.shape[1], ndvi_now.shape[0]),
-                    PILImage.BILINEAR
-                )
-            )
+            # Resize past to match current using scipy
+            from scipy.ndimage import zoom
+            zoom_h = ndvi_now.shape[0] / ndvi_past.shape[0]
+            zoom_w = ndvi_now.shape[1] / ndvi_past.shape[1]
+            ndvi_past = zoom(ndvi_past, (zoom_h, zoom_w), order=1)
+            print(f"  Resized past NDVI from {ctx_past.ndvi.shape} to {ndvi_past.shape}")
 
-        delta = ndvi_now - ndvi_past
-        return float(np.mean(delta)), delta
+        # Compute delta ignoring NaN
+        delta     = ndvi_now - ndvi_past
+        valid     = delta[~np.isnan(delta)]
+
+        if len(valid) == 0:
+            print("  [WARNING] No valid pixels for ΔNDVI computation")
+            return None
+
+        mean_delta = float(np.nanmean(delta))
+        print(f"  ΔNDVI: mean={mean_delta:.4f}, valid_pixels={len(valid)}")
+        return mean_delta, delta
 
     except Exception as e:
         print(f"  [WARNING] Temporal NDVI failed: {e}")
