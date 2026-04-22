@@ -183,24 +183,23 @@ def build_full_interpretation(results: dict) -> str:
 
     if results.get("vegetation_breakdown"):
         vb = results["vegetation_breakdown"]
-        sparse   = vb.get("sparse_pct", 0)
-        moderate = vb.get("moderate_pct", 0)
-        dense    = vb.get("dense_pct", 0)
-        if sparse + moderate + dense > 0:
-            lines.append("── VEGETATION BREAKDOWN ─────────────────────────────────")
-            lines.append(f"  Sparse   (NDVI 0.10–0.25) : {sparse:.2f}%")
-            lines.append(f"  Moderate (NDVI 0.25–0.45) : {moderate:.2f}%")
-            lines.append(f"  Dense    (NDVI > 0.45)    : {dense:.2f}%")
-            lines.append("")
+        lines.append("── VEGETATION BREAKDOWN ─────────────────────────────────")
+        lines.append(f"  Sparse   (NDVI 0.10–0.25) : {vb.get('sparse_pct', 0):.2f}%")
+        lines.append(f"  Moderate (NDVI 0.25–0.45) : {vb.get('moderate_pct', 0):.2f}%")
+        lines.append(f"  Dense    (NDVI > 0.45)    : {vb.get('dense_pct', 0):.2f}%")
+        lines.append("")
 
     if results.get("water_ratio") is not None:
-        wr = results["water_ratio"]
-        if not (isinstance(wr, float) and wr != wr):  # NaN check
-            lines.append("── HYDROLOGICAL INDICATORS ──────────────────────────────")
-            lines.append(f"  Water/flood coverage : {wr*100:.2f}%")
-            if wr > 0.25:
-                lines.append("  ⚠ Possible flooding detected")
-            lines.append("")
+        try:
+            wr = float(results["water_ratio"])
+            if not np.isnan(wr):
+                lines.append("── HYDROLOGICAL INDICATORS ──────────────────────────────")
+                lines.append(f"  Water/flood coverage : {wr*100:.2f}%")
+                if wr > 0.25:
+                    lines.append("  ⚠ Possible flooding detected")
+                lines.append("")
+        except Exception:
+            pass
 
     if results.get("ndvi_trend") is not None:
         import math
