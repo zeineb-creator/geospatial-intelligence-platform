@@ -56,29 +56,85 @@ def safe_index(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         )
     return np.clip(result, -1.0, 1.0).astype(np.float32)
 
-
-def compute_ndvi(array, config):
+ def compute_ndvi(array, config, prescaled=True):
     if config["nir"] is None:
         return None
-    nir = mask_nodata(normalize_band(array[config["nir"]], prescaled=True))
-    red = mask_nodata(normalize_band(array[config["red"]], prescaled=True))
+    nir = array[config["nir"]].astype(np.float32).copy()
+    red = array[config["red"]].astype(np.float32).copy()
+    if prescaled:
+        nir[nir <= NODATA_THRESHOLD] = np.nan
+        red[red <= NODATA_THRESHOLD] = np.nan
+        nir = np.where(np.isnan(nir), np.nan, np.clip(nir, 0, 1))
+        red = np.where(np.isnan(red), np.nan, np.clip(red, 0, 1))
+    else:
+        nir = normalize_band(nir)
+        red = normalize_band(red)
     return safe_index(nir, red)
 
 
-def compute_ndwi(array, config):
+def compute_ndwi(array, config, prescaled=True):
     if config["nir"] is None:
         return None
-    green = mask_nodata(normalize_band(array[config["green"]], prescaled=True))
-    nir   = mask_nodata(normalize_band(array[config["nir"]],   prescaled=True))
+    green = array[config["green"]].astype(np.float32).copy()
+    nir   = array[config["nir"]].astype(np.float32).copy()
+    if prescaled:
+        green[green <= NODATA_THRESHOLD] = np.nan
+        nir[nir     <= NODATA_THRESHOLD] = np.nan
+        green = np.where(np.isnan(green), np.nan, np.clip(green, 0, 1))
+        nir   = np.where(np.isnan(nir),   np.nan, np.clip(nir,   0, 1))
+    else:
+        green = normalize_band(green)
+        nir   = normalize_band(nir)
     return safe_index(green, nir)
 
 
-def compute_ndbi(array, config):
+def compute_ndbi(array, config, prescaled=True):
     if config["swir"] is None or config["nir"] is None:
         return None
-    swir = mask_nodata(normalize_band(array[config["swir"]], prescaled=True))
-    nir  = mask_nodata(normalize_band(array[config["nir"]],  prescaled=True))
+    swir = array[config["swir"]].astype(np.float32).copy()
+    nir  = array[config["nir"]].astype(np.float32).copy()
+    if prescaled:
+        swir[swir <= NODATA_THRESHOLD] = np.nan
+        nir[nir   <= NODATA_THRESHOLD] = np.nan
+        swir = np.where(np.isnan(swir), np.nan, np.clip(swir, 0, 1))
+        nir  = np.where(np.isnan(nir),  np.nan, np.clip(nir,  0, 1))
+    else:
+        swir = normalize_band(swir)
+        nir  = normalize_band(nir)
     return safe_index(swir, nir)
+
+
+def compute_cover_percentages(feature_maps: dict, total_pixels: int,
+                               height: int = None, width: int = None) -> dict:
+    """
+    Mutually exclusive land cover — water > vegetation > urban > barren.
+    Uses actual image dimensions instead of assuming square.
+    """
+    if height is None or width is None:
+        side   = int(total_pixels ** 0.5)
+        height = width = side
+
+    classified = np.zeros((height, width), dtype=np.uint8)
+
+    priority = ["water_mask", "vegetation_mask", "urban_mask"]
+    labels   = {"water_mask": "water", "vegetation_mask": "vegetation", "urban_mask": "urban"}
+    codes    = {"water_mask": 1, "vegetation_mask": 2, "urban_mask": 3}
+
+    for mask_name in priority:
+        if mask_name in feature_maps:
+            mask = feature_maps[mask_name]
+            if mask.shape == (height, width):
+                classified[mask.astype(bool) & (classified == 0)] = codes[mask_name]
+            else:
+                print(f"  [WARNING] Mask shape {mask.shape} != image shape ({height},{width}) — skipping {mask_name}")
+
+    percentages = {}
+    for mask_name in priority:
+        pct = round(float((classified == codes[mask_name]).sum()) / total_pixels * 100, 2)
+        percentages[labels[mask_name]] = pct
+
+    percentages["barren"] = round(float((classified == 0).sum()) / total_pixels * 100, 2)
+    return percentages
 
 
 def compute_vegetation_breakdown(ndvi: np.ndarray, total_pixels: int) -> dict:
@@ -102,60 +158,38 @@ def detect_flood(ndwi: np.ndarray, total_pixels: int) -> float:
     return round(float((valid > 0.3).sum()) / total_pixels, 4)
 
 
-def generate_feature_maps(array: np.ndarray, config: dict) -> dict:
+def generate_feature_maps(array: np.ndarray, config: dict,
+                           prescaled: bool = True) -> dict:
     maps = {}
-    ndvi = compute_ndvi(array, config)
-    ndwi = compute_ndwi(array, config)
-    ndbi = compute_ndbi(array, config)
+    ndvi = compute_ndvi(array, config, prescaled=prescaled)
+    ndwi = compute_ndwi(array, config, prescaled=prescaled)
+    ndbi = compute_ndbi(array, config, prescaled=prescaled)
 
     if ndvi is not None:
-        valid_ndvi = np.where(np.isnan(ndvi), 0, ndvi)
-        veg_mean   = float(np.nanmean(ndvi)) if not np.all(np.isnan(ndvi)) else 0.0
-        veg_std    = float(np.nanstd(ndvi))  if not np.all(np.isnan(ndvi)) else 0.0
+        valid_ndvi    = np.where(np.isnan(ndvi), 0, ndvi)
+        veg_mean      = float(np.nanmean(ndvi)) if not np.all(np.isnan(ndvi)) else 0.0
+        veg_std       = float(np.nanstd(ndvi))  if not np.all(np.isnan(ndvi)) else 0.0
         veg_threshold = max(0.1, veg_mean + 0.3 * veg_std)
         maps["vegetation_mask"] = (valid_ndvi > veg_threshold).astype(np.uint8)
         print(f"  NDVI adaptive threshold: {veg_threshold:.3f}")
 
     if ndwi is not None:
-        valid_ndwi  = np.where(np.isnan(ndwi), 0, ndwi)
-        water_mean  = float(np.nanmean(ndwi)) if not np.all(np.isnan(ndwi)) else 0.0
-        water_std   = float(np.nanstd(ndwi))  if not np.all(np.isnan(ndwi)) else 0.0
+        valid_ndwi      = np.where(np.isnan(ndwi), 0, ndwi)
+        water_mean      = float(np.nanmean(ndwi)) if not np.all(np.isnan(ndwi)) else 0.0
+        water_std       = float(np.nanstd(ndwi))  if not np.all(np.isnan(ndwi)) else 0.0
         water_threshold = max(0.0, water_mean + 0.5 * water_std)
         maps["water_mask"] = (valid_ndwi > water_threshold).astype(np.uint8)
         print(f"  NDWI adaptive threshold: {water_threshold:.3f}")
 
     if ndbi is not None:
-        valid_ndbi  = np.where(np.isnan(ndbi), 0, ndbi)
-        urban_mean  = float(np.nanmean(ndbi)) if not np.all(np.isnan(ndbi)) else 0.0
-        urban_std   = float(np.nanstd(ndbi))  if not np.all(np.isnan(ndbi)) else 0.0
+        valid_ndbi      = np.where(np.isnan(ndbi), 0, ndbi)
+        urban_mean      = float(np.nanmean(ndbi)) if not np.all(np.isnan(ndbi)) else 0.0
+        urban_std       = float(np.nanstd(ndbi))  if not np.all(np.isnan(ndbi)) else 0.0
         urban_threshold = max(0.05, urban_mean + 0.5 * urban_std)
         maps["urban_mask"] = (valid_ndbi > urban_threshold).astype(np.uint8)
         print(f"  NDBI adaptive threshold: {urban_threshold:.3f}")
 
     return maps
-
-
-def compute_cover_percentages(feature_maps: dict, total_pixels: int) -> dict:
-    side = int(total_pixels ** 0.5)
-    classified = np.zeros((side, side), dtype=np.uint8)
-
-    priority = ["water_mask", "vegetation_mask", "urban_mask"]
-    labels   = {"water_mask": "water", "vegetation_mask": "vegetation", "urban_mask": "urban"}
-    codes    = {"water_mask": 1, "vegetation_mask": 2, "urban_mask": 3}
-
-    for mask_name in priority:
-        if mask_name in feature_maps:
-            mask = feature_maps[mask_name]
-            if mask.shape == classified.shape:
-                classified[mask.astype(bool) & (classified == 0)] = codes[mask_name]
-
-    percentages = {}
-    for mask_name in priority:
-        pct = round(float((classified == codes[mask_name]).sum()) / total_pixels * 100, 2)
-        percentages[labels[mask_name]] = pct
-
-    percentages["barren"] = round(float((classified == 0).sum()) / total_pixels * 100, 2)
-    return percentages
 
 
 def compute_aridity_index(context: InputContext):
@@ -272,20 +306,20 @@ def process_image(context: InputContext, sensor: str = None) -> InputContext:
             print(f"  {name}: skipped (missing required bands)")
 
     total_pixels = array.shape[1] * array.shape[2]
-    feature_maps = generate_feature_maps(normalized, config)
-    coverage     = compute_cover_percentages(feature_maps, total_pixels)
+    height       = array.shape[1]
+    width        = array.shape[2]
+
+    # Use RAW array for index computation (nodata masking happens inside)
+    feature_maps = generate_feature_maps(array, config, prescaled=prescaled)
+    coverage = compute_cover_percentages(feature_maps, total_pixels, height=height, width=width)
 
     print(f"  Coverage: {coverage}")
     context.land_cover = coverage
 
-    if context.ndvi is not None:
-        context.vegetation_breakdown = compute_vegetation_breakdown(
-            context.ndvi, total_pixels)
-        print(f"  Vegetation breakdown: {context.vegetation_breakdown}")
-
-    if context.ndwi is not None:
-        context.water_ratio = detect_flood(context.ndwi, total_pixels)
-        print(f"  Water/flood ratio: {context.water_ratio:.3f}")
+    # Compute indices from raw array for accurate stats
+    context.ndvi = compute_ndvi(array, config, prescaled=prescaled)
+    context.ndwi = compute_ndwi(array, config, prescaled=prescaled)
+    context.ndbi = compute_ndbi(array, config, prescaled=prescaled)
 
     context.aridity_index = compute_aridity_index(context)
     if context.aridity_index:
