@@ -230,41 +230,59 @@ def compute_seasonality(context: InputContext) -> str:
     else:                 return "relatively uniform"
 
 
-def classify_ecosystem(land_cover: dict, aridity_index=None, ndvi_mean=None) -> str:
+def classify_ecosystem(land_cover: dict, aridity_index=None,
+                        ndvi_mean=None) -> str:
     water      = land_cover.get("water", 0)
     vegetation = land_cover.get("vegetation", 0)
     urban      = land_cover.get("urban", 0)
     barren     = land_cover.get("barren", 0)
 
+    # Water-dominated
     if water > 50:
         return "Aquatic / Wetland"
+
+    # Urban-dominated
     if urban > 40:
         return "Urban / Built-up area"
+
+    # Coastal mixed (water + vegetation + urban — typical Mediterranean)
+    if water > 10 and vegetation > 20 and urban > 10:
+        if aridity_index is not None and aridity_index < 0.5:
+            return "Mediterranean coastal mixed landscape"
+        return "Coastal mixed landscape"
+
+    # Dense vegetation
     if vegetation > 60:
         if ndvi_mean and ndvi_mean > 0.5:
             return "Dense forest / Tropical vegetation"
         return "Agricultural land / Grassland"
 
+    # Use aridity index with land cover context
     if aridity_index is not None:
         if aridity_index < 0.05:
             return "Hyper-arid desert"
         elif aridity_index < 0.2:
-            return "Arid shrubland / Desert" if barren > 40 else "Arid rangeland"
+            if vegetation > 20:
+                return "Semi-arid Mediterranean scrubland"
+            return "Arid shrubland / Desert"
         elif aridity_index < 0.5:
-            return "Semi-arid savanna / Mediterranean scrubland" if vegetation > 25 else "Semi-arid barren land"
+            if vegetation > 25:
+                return "Semi-arid savanna / Mediterranean scrubland"
+            return "Semi-arid barren land"
         elif aridity_index < 0.65:
             return "Dry sub-humid mixed land"
         else:
-            return "Humid forest / Dense vegetation" if vegetation > 40 else "Humid mixed landscape"
+            return "Humid forest / Dense vegetation" if vegetation > 40 \
+                   else "Humid mixed landscape"
 
-    if barren > 50:
+    # Fallback
+    if barren > 60:
         return "Barren / Sparsely vegetated land"
     if vegetation > 30 and urban > 15:
         return "Peri-urban mixed landscape"
     if vegetation > 40:
         return "Mixed agricultural / Natural vegetation"
     return "Mixed / Unclassified landscape"
-
 
 def process_image(context: InputContext, sensor: str = None) -> InputContext:
     print("=== Image Processor ===")
