@@ -42,18 +42,23 @@ def get_region_name(meta: dict) -> str:
         url = (
             f"https://nominatim.openstreetmap.org/reverse"
             f"?lat={lat}&lon={lon}&format=json"
+            f"&accept-language=en&namedetails=0"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "GeoAI-Platform/1.0"})
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read())
 
-        address = data.get("address", {})
-        parts = []
-        for key in ["city", "town", "village", "county", "state", "country"]:
-            if key in address and address[key]:
-                parts.append(address[key])
+        # Force English country names
+        for key in ["city", "town", "village", "municipality", "county", "state", "country"]:
+            val = address.get(key, "")
+            if val and not any(ord(c) > 127 for c in val):  # skip non-ASCII (Arabic)
+                parts.append(val)
                 if len(parts) == 2:
                     break
+
+        # If still empty after filtering, use coordinates
+        if not parts:
+            return f"Lat {lat:.3f}, Lon {lon:.3f}"
 
         return ", ".join(parts) if parts else "Unknown region"
 
