@@ -4,7 +4,7 @@ sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
-NODATA_THRESHOLD = -0.19
+NODATA_THRESHOLD = -0.25
 
 BAND_CONFIG = {
     "sentinel2":       {"red": 3,  "green": 2, "blue": 1, "nir": 7,  "swir": 10},
@@ -25,7 +25,9 @@ def detect_sensor(n_bands: int) -> str:
 
 
 def is_prescaled(array: np.ndarray) -> bool:
-    valid = array[array > -999]
+    """Detect if image is already in reflectance [0,1] range."""
+    valid = array[~np.isnan(array)]
+    valid = valid[valid > -999]
     if len(valid) == 0:
         return False
     return float(valid.max()) <= 1.5 and float(valid.min()) >= -0.5
