@@ -56,7 +56,7 @@ def safe_index(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         )
     return np.clip(result, -1.0, 1.0).astype(np.float32)
 
- def compute_ndvi(array, config, prescaled=True):
+def compute_ndvi(array, config, prescaled=True):
     if config["nir"] is None:
         return None
     nir = array[config["nir"]].astype(np.float32).copy()
