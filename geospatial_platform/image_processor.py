@@ -187,7 +187,7 @@ def generate_feature_maps(array: np.ndarray, config: dict,
         valid_ndbi      = np.where(np.isnan(ndbi), 0, ndbi)
         urban_mean      = float(np.nanmean(ndbi)) if not np.all(np.isnan(ndbi)) else 0.0
         urban_std       = float(np.nanstd(ndbi))  if not np.all(np.isnan(ndbi)) else 0.0
-        urban_threshold = max(0.05, urban_mean + 0.5 * urban_std)
+        urban_threshold = max(0.15, urban_mean + 0.3 * urban_std)  # lowered from 0.5*std
         maps["urban_mask"] = (valid_ndbi > urban_threshold).astype(np.uint8)
         print(f"  NDBI adaptive threshold: {urban_threshold:.3f}")
 
