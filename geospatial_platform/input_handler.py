@@ -24,49 +24,58 @@ def get_region_name(meta: dict) -> str:
         width     = meta.get("width", 0)
         height    = meta.get("height", 0)
 
-        if transform is None or width == 0 or height == 0:
+        if transform is None:
             return "Unknown region"
 
-        row = height // 2
-        col = width  // 2
-        x, y = rt.xy(transform, row, col)
+        # Get center coordinates
+        x, y = rt.xy(transform, height // 2, width // 2)
         lat, lon = float(y), float(x)
 
         if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
-            return f"Lat {lat:.3f}, Lon {lon:.3f}"
+            return f"{lat:.3f}°N, {lon:.3f}°E"
 
         print(f"  Geocoding: lat={lat:.4f}, lon={lon:.4f}")
 
-        url = (
-            f"https://nominatim.openstreetmap.org/reverse"
-            f"?lat={lat}&lon={lon}&format=json&accept-language=en"
-        )
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "GeoAI-Platform/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read())
+        # Try Nominatim with longer timeout and proper headers
+        for lang in ["en", "fr"]:
+            try:
+                url = (
+                    f"https://nominatim.openstreetmap.org/reverse"
+                    f"?lat={lat}&lon={lon}&format=json"
+                    f"&accept-language={lang}&zoom=10"
+                )
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "GeoSpatialPlatform/2.0 (research project)",
+                        "Accept-Language": lang,
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
 
-        address = data.get("address", {})
-        parts   = []
+                address = data.get("address", {})
+                parts   = []
 
-        for key in ["city", "town", "village", "municipality",
-                    "county", "state", "country"]:
-            val = address.get(key, "")
-            if val and len(val) > 0:
-                # Skip if primarily non-Latin characters
-                latin_ratio = sum(1 for c in val if ord(c) < 256) / len(val)
-                if latin_ratio > 0.5:
-                    parts.append(val)
-                    if len(parts) == 2:
-                        break
+                for key in ["city", "town", "village", "municipality",
+                            "county", "state", "country"]:
+                    val = address.get(key, "")
+                    if not val:
+                        continue
+                    # Accept if mostly ASCII/Latin
+                    latin_count = sum(1 for c in val if ord(c) < 256)
+                    if latin_count / len(val) > 0.6:
+                        parts.append(val)
+                        if len(parts) == 2:
+                            break
 
-        if parts:
-            return ", ".join(parts)
+                if parts:
+                    return ", ".join(parts)
 
-        # Fallback: use country + coordinates
-        country = address.get("country", "")
-        if country:
-            return f"{country} ({lat:.2f}°N, {lon:.2f}°E)"
+            except Exception:
+                continue
+
+        # Final fallback: just return coordinates
         return f"{lat:.3f}°N, {lon:.3f}°E"
 
     except Exception as e:
