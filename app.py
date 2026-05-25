@@ -311,7 +311,7 @@ with st.sidebar:
 
     st.markdown("### 📊 Climate Data")
     uploaded_csv = st.file_uploader(
-        "NASA POWER CSV — optional",
+        "CLIMATE DATA CSV — optional",
         type=["csv"],
         key="csv",
         help="15-year monthly climate data from NASA POWER API."
