@@ -224,15 +224,10 @@ h3 { font-size: 0.95rem !important; color: #79c0ff !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Pipeline imports ──────────────────────────────────────────────────────────
+# ── Pipeline imports (lazy — loaded only when analysis runs) ──────────────────
+# Kept here as a reference. Actual imports happen inside the run block below
+# so a broken module never crashes the sidebar/UI on page load.
 sys.path.insert(0, os.path.dirname(__file__))
-from geospatial_platform.context import InputContext
-from geospatial_platform.input_handler import handle_input
-from geospatial_platform.image_processor import process_image
-from geospatial_platform.vision_model import extract_vit_features
-from geospatial_platform.data_integrator import integrate_data, build_climate_summary, populate_convenience_fields
-from geospatial_platform.rag import retrieve_context
-from geospatial_platform.llm_engine import generate_report
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -424,52 +419,132 @@ if not uploaded_t1:
 # PIPELINE EXECUTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-status = st.status("Running geospatial analysis pipeline…", expanded=True)
+status = st.status("Running geospatial analysis pipeline...", expanded=True)
+
+def _import_error_card(module: str, err: Exception):
+    st.markdown(f"""
+    <div class="geo-card geo-card-error">
+        <strong>Import failed:</strong> <code>{module}</code><br><br>
+        <code style="font-size:0.78rem;">{err}</code><br><br>
+        <div style="color:#8b949e;font-size:0.78rem;">
+        Check that the function name in <code>{module}</code> matches what app.py expects,
+        and that all dependencies in <code>requirements.txt</code> are installed.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 try:
     with status:
-        # Step 1 — Input handling
-        st.write("📥 Validating inputs and extracting metadata…")
+
+        # Lazy imports so a broken module shows a clear per-step message
+        st.write("Loading pipeline modules...")
+        try:
+            from geospatial_platform.context import InputContext
+        except Exception as e:
+            _import_error_card("geospatial_platform.context -> InputContext", e)
+            st.stop()
+
+        try:
+            from geospatial_platform.input_handler import handle_input
+        except Exception as e:
+            _import_error_card("geospatial_platform.input_handler -> handle_input", e)
+            st.stop()
+
+        try:
+            from geospatial_platform.image_processor import process_image
+        except Exception as e:
+            _import_error_card("geospatial_platform.image_processor -> process_image", e)
+            st.stop()
+
+        try:
+            from geospatial_platform.vision_model import extract_vit_features
+        except Exception as e:
+            _import_error_card("geospatial_platform.vision_model -> extract_vit_features", e)
+            st.stop()
+
+        build_climate_summary = None
+        populate_convenience_fields = None
+        try:
+            from geospatial_platform.data_integrator import (
+                integrate_data,
+                build_climate_summary,
+                populate_convenience_fields,
+            )
+        except ImportError:
+            try:
+                from geospatial_platform.data_integrator import integrate_data
+                st.warning(
+                    "build_climate_summary / populate_convenience_fields not found in "
+                    "data_integrator.py yet. Add them per the setup guide. "
+                    "Climate summary will be skipped."
+                )
+            except Exception as e2:
+                _import_error_card("geospatial_platform.data_integrator -> integrate_data", e2)
+                st.stop()
+
+        try:
+            from geospatial_platform.rag import retrieve_context
+        except Exception as e:
+            _import_error_card("geospatial_platform.rag -> retrieve_context", e)
+            st.stop()
+
+        try:
+            from geospatial_platform.llm_engine import generate_report
+        except Exception as e:
+            _import_error_card("geospatial_platform.llm_engine -> generate_report", e)
+            st.stop()
+
+        # Step 1 - Input handling
+        st.write("Validating inputs and extracting metadata...")
         ic = InputContext(user_question=user_question)
         ic = handle_input(ic, uploaded_t1, uploaded_t2, uploaded_csv)
 
-        # Step 2 — Image processing
-        st.write("🔬 Computing spectral indices (NDVI · NDWI · NDBI)…")
+        # Step 2 - Image processing
+        st.write("Computing spectral indices (NDVI, NDWI, NDBI)...")
         ic = process_image(ic)
 
-        # Step 3 — ViT feature extraction
-        st.write("🧠 Extracting Vision Transformer features…")
+        # Step 3 - ViT feature extraction
+        st.write("Extracting Vision Transformer features...")
         ic = extract_vit_features(ic)
 
-        # Step 4 — Climate data integration
+        # Step 4 - Climate data integration
         if uploaded_csv:
-            st.write("📊 Integrating NASA POWER climate data…")
+            st.write("Integrating NASA POWER climate data...")
             ic = integrate_data(ic)
-            ic.climate_summary = build_climate_summary(ic.climate_df)
-            populate_convenience_fields(ic)
+            if build_climate_summary and populate_convenience_fields:
+                ic.climate_summary = build_climate_summary(ic.climate_df)
+                populate_convenience_fields(ic)
+            else:
+                if hasattr(ic, "climate_df") and ic.climate_df is not None:
+                    df = ic.climate_df
+                    ic.humidity_pct = (
+                        float(df["humidity_pct"].iloc[-1])
+                        if "humidity_pct" in df.columns else None
+                    )
         else:
-            st.write("📊 No climate CSV — skipping climate integration.")
+            st.write("No climate CSV - skipping climate integration.")
 
-        # Step 5 — RAG context retrieval
-        st.write("📚 Retrieving environmental context (RAG)…")
+        # Step 5 - RAG context retrieval
+        st.write("Retrieving environmental context (RAG)...")
         ic = retrieve_context(ic)
 
-        # Step 6 — Report generation
-        st.write("✍️ Generating scientific report…")
+        # Step 6 - Report generation
+        st.write("Generating scientific report...")
         ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
 
-    status.update(label="✅ Analysis complete", state="complete", expanded=False)
+    status.update(label="Analysis complete", state="complete", expanded=False)
 
 except Exception as e:
-    status.update(label="❌ Pipeline error", state="error", expanded=True)
+    status.update(label="Pipeline error", state="error", expanded=True)
     st.markdown(f"""
     <div class="geo-card geo-card-error">
-        <strong>Pipeline failed:</strong><br>
-        <code style="font-size:0.8rem;">{e}</code>
+        <strong>Pipeline failed at runtime:</strong><br><br>
+        <code style="font-size:0.78rem;">{type(e).__name__}: {e}</code>
     </div>
     """, unsafe_allow_html=True)
     st.exception(e)
     st.stop()
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
