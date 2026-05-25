@@ -217,12 +217,17 @@ def populate_convenience_fields(ic: InputContext):
     Call this at the end of your climate processor step.
     """
     if ic.climate_summary:
-        ic.humidity_pct  = ic.climate_summary.get("humidity_pct_latest")
+        ic.humidity_pct = ic.climate_summary.get("humidity_pct_latest")
         ic.rainfall_trend = ic.climate_summary.get("rainfall_mm_trend")
  
     if ic.land_cover:
         ic.water_pct = ic.land_cover.get("water", 0.0)
  
-    if ic.ndvi_mean_t1 is not None and ic.ndvi_mean_t2 is not None:
-        ic.ndvi_delta = ic.ndvi_mean_t2 - ic.ndvi_mean_t1
-
+    # FIX: Check for ndvi_mean (singular) instead of ndvi_mean_t1/t2
+    # Your context uses ndvi_mean (from process_image)
+    if hasattr(ic, 'ndvi_mean') and ic.ndvi_mean is not None:
+        # If you have temporal comparison, use ndvi_delta if it exists
+        if hasattr(ic, 'ndvi_delta') and ic.ndvi_delta is not None:
+            pass  # ndvi_delta already set elsewhere
+        elif hasattr(ic, 'ndvi_mean_t2') and ic.ndvi_mean_t2 is not None:
+            ic.ndvi_delta = ic.ndvi_mean_t2 - ic.ndvi_mean
