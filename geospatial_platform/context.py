@@ -34,7 +34,7 @@ class InputContext:
     # Temporal analysis (populated when second image provided)
     ndvi_previous: Optional[np.ndarray] = None
     ndvi_trend: Optional[float] = None
-    ndvi_trend_map: Optional[np.ndarray] = None  # pixel-level change map
+    ndvi_trend_map: Optional[np.ndarray] = None
     ndvi_delta: Optional[float] = None
     ndvi_mean_t1: Optional[float] = None
     ndvi_mean_t2: Optional[float] = None
@@ -48,9 +48,9 @@ class InputContext:
     land_cover: Optional[dict] = None
     anomalies: Optional[list] = field(default_factory=list)
     retrieved_context: Optional[str] = None
-    rag_context: Optional[str] = None  # Alias for retrieved_context
+    rag_context: Optional[str] = None
     final_report: Optional[str] = None
-    report: Optional[str] = None  # Alias for final_report
+    report: Optional[str] = None
     confidence_score: Optional[float] = None
 
     # Climate
