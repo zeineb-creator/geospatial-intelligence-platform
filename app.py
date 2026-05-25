@@ -479,8 +479,12 @@ try:
             st.write("📊 Integrating NASA POWER climate data…")
             ic = integrate_data(ic)
             if build_climate_summary and populate_convenience_fields:
-                ic.climate_summary = build_climate_summary(ic.climate_df)
-                populate_convenience_fields(ic)
+                # FIX: Use csv_df (the raw climate data) not climate_df
+                if hasattr(ic, 'csv_df') and ic.csv_df is not None:
+                    ic.climate_summary = build_climate_summary(ic.csv_df)
+                    populate_convenience_fields(ic)
+                else:
+                    st.warning("⚠️ Climate data not available for summary generation")
         else:
             st.write("📊 No climate CSV — skipping climate integration.")
 
