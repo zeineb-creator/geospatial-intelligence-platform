@@ -3,7 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io, sys, os, tempfile, re
 from geospatial_platform.vision_model import extract_vit_features
-features = extract_vit_features(context)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
