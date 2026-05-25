@@ -516,6 +516,35 @@ try:
         if ic.region is None:
             ic.region = ic.image_meta.get("region_name", "Unknown region")
         
+        # Set temporal labels if second image exists
+        if hasattr(ic, 'image_array_t2') and ic.image_array_t2 is not None:
+            ic.temporal_label_t1 = "Image 1 (earlier)"
+            ic.temporal_label_t2 = "Image 2 (later)"
+        
+        # Generate report
+        rag_text = getattr(ic, 'rag_context', '') or getattr(ic, 'retrieved_context', '')
+        ic.report = generate_report(ic, rag_text, ic.anomalies or [])
+        
+        # ── Step 6 — Report generation ────────────────────────────────────────
+        st.write("✍️ Generating scientific report…")
+        
+        # Compute mean values for LLM if not already set
+        if ic.ndvi is not None and ic.ndvi_mean is None:
+            ic.ndvi_mean = float(np.nanmean(ic.ndvi))
+            ic.ndvi_map = ic.ndvi
+        if ic.ndwi is not None and ic.ndwi_mean is None:
+            ic.ndwi_mean = float(np.nanmean(ic.ndwi))
+            ic.ndwi_map = ic.ndwi
+        if ic.ndbi is not None and ic.ndbi_mean is None:
+            ic.ndbi_mean = float(np.nanmean(ic.ndbi))
+            ic.ndbi_map = ic.ndbi
+        
+        # Set ecosystem and region from image_meta
+        if ic.ecosystem is None:
+            ic.ecosystem = ic.image_meta.get("ecosystem", "Mixed landscape")
+        if ic.region is None:
+            ic.region = ic.image_meta.get("region_name", "Unknown region")
+        
         # Generate report
         ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
 
