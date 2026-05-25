@@ -50,6 +50,18 @@ def extract_features(image_uint8: np.ndarray, extractor, model) -> np.ndarray:
     cls_embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()
     return cls_embedding
 
+def extract_vit_features(context: InputContext, extractor=None, model=None) -> np.ndarray:
+    """
+    Extract ViT features from the image in the context.
+    This is a wrapper around the existing pipeline.
+    """
+    if extractor is None or model is None:
+        extractor, model = load_vit()
+    
+    image_uint8 = prepare_image_for_vit(context.image_array, context.ndvi)
+    cls_embedding = extract_features(image_uint8, extractor, model)
+    
+    return cls_embedding
 
 def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tuple:
     scores = {cls: 0.0 for cls in LAND_COVER_CLASSES}
