@@ -169,3 +169,61 @@ def run_data_integrator(context: InputContext) -> InputContext:
 
     print("=== Data integrator complete ===\n")
     return context
+
+
+def build_climate_summary(df) -> dict:
+    """
+    Derive the climate_summary dict from the raw NASA POWER DataFrame.
+    Call this in your climate processor (step 5) and store result in
+    input_context.climate_summary.
+ 
+    Expected DataFrame columns (any subset):
+        rainfall_mm, temperature_c, humidity_pct
+    """
+    import numpy as np
+ 
+    summary = {}
+ 
+    def _stats(col):
+        if col not in df.columns:
+            return {}
+        s = df[col].dropna()
+        if s.empty:
+            return {}
+        trend = "stable"
+        if len(s) > 2:
+            half = len(s) // 2
+            if s.iloc[-half:].mean() > s.iloc[:half].mean() * 1.1:
+                trend = "increasing"
+            elif s.iloc[-half:].mean() < s.iloc[:half].mean() * 0.9:
+                trend = "decreasing"
+        cv = s.std() / s.mean() if s.mean() != 0 else 0
+        return {
+            f"{col}_latest": float(s.iloc[-1]),
+            f"{col}_mean":   float(s.mean()),
+            f"{col}_trend":  trend,
+            f"{col}_cv":     float(cv),
+        }
+ 
+    for col in ["rainfall_mm", "temperature_c", "humidity_pct"]:
+        summary.update(_stats(col))
+ 
+    return summary
+ 
+ 
+def populate_convenience_fields(ic: InputContext):
+    """
+    After building climate_summary, populate the convenience aliases
+    and derived fields on the InputContext.
+    Call this at the end of your climate processor step.
+    """
+    if ic.climate_summary:
+        ic.humidity_pct  = ic.climate_summary.get("humidity_pct_latest")
+        ic.rainfall_trend = ic.climate_summary.get("rainfall_mm_trend")
+ 
+    if ic.land_cover:
+        ic.water_pct = ic.land_cover.get("water", 0.0)
+ 
+    if ic.ndvi_mean_t1 is not None and ic.ndvi_mean_t2 is not None:
+        ic.ndvi_delta = ic.ndvi_mean_t2 - ic.ndvi_mean_t1
+ 
