@@ -136,7 +136,7 @@ def format_summary_for_llm(summary: dict, anomalies: list) -> str:
     return "\n".join(lines)
 
 
-def run_data_integrator(context: InputContext) -> InputContext:
+def integrate_data(context: InputContext) -> InputContext:
     print("=== Data Integrator ===")
 
     if context.csv_df is None:
