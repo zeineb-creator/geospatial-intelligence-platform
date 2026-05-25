@@ -175,12 +175,6 @@ def build_rag_context(
 
     return "\n".join(lines)
 
-def retrieve_context(context: InputContext) -> InputContext:
-    """
-    Wrapper function that matches what app.py expects.
-    Calls the existing run_rag function.
-    """
-    return run_rag(context)
     
 def run_rag(context: InputContext) -> InputContext:
     """
@@ -221,3 +215,11 @@ def run_rag(context: InputContext) -> InputContext:
     print("-------------------------------\n")
 
     return context
+
+def retrieve_context(context: InputContext) -> InputContext:
+    """
+    Wrapper function that matches what app.py expects.
+    Calls the existing run_rag function.
+    """
+    return run_rag(context)
+    
