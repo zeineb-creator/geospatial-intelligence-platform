@@ -1,4 +1,3 @@
-
 import os
 from groq import Groq
 from dataclasses import dataclass
@@ -20,6 +19,8 @@ def get_groq_client():
 # ── Contextual interpretation helpers ────────────────────────────────────────
 
 def interpret_ndvi(ndvi: float) -> str:
+    if ndvi is None:
+        return "not available"
     if ndvi < 0.1:
         return "near-zero (bare soil or rock, no meaningful vegetation)"
     elif ndvi < 0.2:
@@ -35,6 +36,8 @@ def interpret_ndvi(ndvi: float) -> str:
 
 
 def interpret_ndwi(ndwi: float) -> str:
+    if ndwi is None:
+        return "not available"
     if ndwi > 0.3:
         return "strongly positive — open water body clearly present"
     elif ndwi > 0.0:
@@ -46,6 +49,8 @@ def interpret_ndwi(ndwi: float) -> str:
 
 
 def interpret_ndbi(ndbi: float) -> str:
+    if ndbi is None:
+        return "not available"
     if ndbi > 0.2:
         return "high — significant built-up or impervious surface"
     elif ndbi > 0.0:
@@ -56,6 +61,8 @@ def interpret_ndbi(ndbi: float) -> str:
 
 def interpret_aridity(ai: float) -> str:
     """UNESCO aridity classes with ecological meaning."""
+    if ai is None:
+        return "not available"
     if ai < 0.05:
         return "Hyper-arid (desert core; essentially no rain-fed vegetation possible)"
     elif ai < 0.2:
@@ -69,27 +76,29 @@ def interpret_aridity(ai: float) -> str:
 
 
 def interpret_ndvi_delta(delta: float) -> str:
+    if delta is None:
+        return "no temporal data"
     if delta > 0.15:
         return (
-            "large positive shift (+{:.3f}) — substantial vegetation increase "
-            "consistent with land use change, reforestation, or a multi-year wet period".format(delta)
+            f"large positive shift (+{delta:.3f}) — substantial vegetation increase "
+            "consistent with land use change, reforestation, or a multi-year wet period"
         )
     elif delta > 0.05:
         return (
-            "moderate positive shift (+{:.3f}) — gradual greening, "
-            "possibly linked to improved rainfall or reduced grazing pressure".format(delta)
+            f"moderate positive shift (+{delta:.3f}) — gradual greening, "
+            "possibly linked to improved rainfall or reduced grazing pressure"
         )
     elif delta > -0.05:
-        return "stable (±{:.3f}) — no meaningful change in vegetation density".format(delta)
+        return f"stable (±{delta:.3f}) — no meaningful change in vegetation density"
     elif delta > -0.15:
         return (
-            "moderate negative shift ({:.3f}) — vegetation decline, "
-            "possible drought stress, overgrazing, or land clearing".format(delta)
+            f"moderate negative shift ({delta:.3f}) — vegetation decline, "
+            "possible drought stress, overgrazing, or land clearing"
         )
     else:
         return (
-            "large negative shift ({:.3f}) — severe vegetation loss, "
-            "consistent with desertification, fire, or major land use change".format(delta)
+            f"large negative shift ({delta:.3f}) — severe vegetation loss, "
+            "consistent with desertification, fire, or major land use change"
         )
 
 
@@ -209,10 +218,13 @@ def build_prompt(input_context, rag_context: str, anomalies: list[str]) -> str:
 
     # --- Land cover summary ---
     lc_lines = ""
-    for cls, pct in (ic.land_cover or {}).items():
-        lc_lines += f"    {cls:<14}: {pct:.1f}%\n"
+    if ic.land_cover:
+        for cls, pct in ic.land_cover.items():
+            lc_lines += f"    {cls:<14}: {pct:.1f}%\n"
+    else:
+        lc_lines = "    No land cover data available\n"
 
-    # --- Climate summary (interpreted, not raw) ---
+    # --- Climate summary (interpreted, not raw) with safe None handling ---
     climate_block = ""
     if ic.climate_summary:
         cs = ic.climate_summary
@@ -223,13 +235,30 @@ def build_prompt(input_context, rag_context: str, anomalies: list[str]) -> str:
         t_mean    = cs.get("temperature_c_mean")
         hum       = cs.get("humidity_pct_latest")
         cv        = cs.get("rainfall_cv")
+        
+        # Safe formatting with None checks
+        rf_latest_str = f"{rf_latest:.1f}" if rf_latest is not None else "N/A"
+        rf_mean_str = f"{rf_mean:.1f}" if rf_mean is not None else "N/A"
+        t_latest_str = f"{t_latest:.1f}" if t_latest is not None else "N/A"
+        t_mean_str = f"{t_mean:.1f}" if t_mean is not None else "N/A"
+        hum_str = f"{hum:.1f}" if hum is not None else "N/A"
+        cv_str = f"{cv:.2f}" if cv is not None else "N/A"
+        
+        # Determine seasonality text
+        if cv is not None:
+            if cv > 0.7:
+                seasonality_text = "very high seasonality; single-month rainfall values are poor indicators of annual conditions"
+            else:
+                seasonality_text = "moderate seasonality"
+        else:
+            seasonality_text = "insufficient data to determine seasonality"
 
         climate_block = f"""
 CLIMATE DATA (15-year record):
-  Rainfall  : latest {rf_latest:.1f} mm vs. long-term monthly mean {rf_mean:.1f} mm — trend {rf_trend}
-  Temperature: latest {t_latest:.1f}°C vs. long-term mean {t_mean:.1f}°C (stable range for coastal Tunisia)
-  Humidity  : {hum:.1f}% (long-term mean ~{cs.get('humidity_pct_mean', 0):.0f}%)
-  Seasonality: rainfall CV = {cv:.2f} — {'very high seasonality; single-month rainfall values are poor indicators of annual conditions' if cv and cv > 0.7 else 'moderate seasonality'}
+  Rainfall  : latest {rf_latest_str} mm vs. long-term monthly mean {rf_mean_str} mm — trend {rf_trend}
+  Temperature: latest {t_latest_str}°C vs. long-term mean {t_mean_str}°C (stable range for coastal Tunisia)
+  Humidity  : {hum_str}% (long-term mean ~{cs.get('humidity_pct_mean', 0):.0f}%)
+  Seasonality: rainfall CV = {cv_str} — {seasonality_text}
 """
 
     # --- Confidence explanation ---
@@ -241,6 +270,13 @@ CLIMATE DATA (15-year record):
     if confidence < 80:
         confidence_basis += "Score penalised for: limited water signal reducing flood confidence."
 
+    # --- Safe formatting for None values in the main prompt ---
+    ndvi_mean_str = f"{ic.ndvi_mean:.3f}" if ic.ndvi_mean is not None else "N/A"
+    ndwi_mean_str = f"{ic.ndwi_mean:.3f}" if ic.ndwi_mean is not None else "N/A"
+    ndbi_mean_str = f"{ic.ndbi_mean:.3f}" if ic.ndbi_mean is not None else "N/A"
+    aridity_index_str = f"{ic.aridity_index:.3f}" if ic.aridity_index is not None else "N/A"
+    ndvi_delta_str = f"{ic.ndvi_delta:+.3f}" if ic.ndvi_delta is not None else "N/A"
+    
     # ═══════════════════════════════════════════════════════════════════════
     # THE PROMPT
     # ═══════════════════════════════════════════════════════════════════════
@@ -253,17 +289,17 @@ REGIONAL BASELINE KNOWLEDGE:
 ═══ INPUT DATA ═══════════════════════════════════════════════════════════════
 
 SPECTRAL INDICES (pre-interpreted):
-  NDVI mean   : {ic.ndvi_mean:.3f} — {ndvi_interp}
-  NDWI mean   : {ic.ndwi_mean:.3f} — {ndwi_interp}
-  NDBI mean   : {ic.ndbi_mean:.3f} — {ndbi_interp}
+  NDVI mean   : {ndvi_mean_str} — {ndvi_interp}
+  NDWI mean   : {ndwi_mean_str} — {ndwi_interp}
+  NDBI mean   : {ndbi_mean_str} — {ndbi_interp}
 
 LAND COVER:
 {lc_lines}
 ARIDITY INDEX:
-  Value : {ic.aridity_index:.3f} — {aridity_interp}
+  Value : {aridity_index_str} — {aridity_interp}
 
 TEMPORAL VEGETATION CHANGE (2010 → 2024):
-  ΔNDVI : {ic.ndvi_delta:+.3f} — {delta_interp}
+  ΔNDVI : {ndvi_delta_str} — {delta_interp}
 
 {climate_block}
 RETRIEVED ENVIRONMENTAL CONTEXT:
@@ -359,11 +395,17 @@ def generate_report(input_context, rag_context: str, anomalies: list[str]) -> st
             "GEOSPATIAL INTELLIGENCE REPORT\n"
             "=" * 60 + "\n\n"
         )
+        
+        # Safe formatting for footer
+        confidence_str = f"{input_context.confidence_score:.0f}" if input_context.confidence_score is not None else "N/A"
+        region_str = input_context.region or 'Unknown'
+        ecosystem_str = input_context.ecosystem or 'Unknown'
+        
         footer = (
             "\n\n" + "=" * 60 + "\n"
-            f"Confidence: {input_context.confidence_score:.0f}%  |  "
-            f"Region: {input_context.region or 'Unknown'}  |  "
-            f"Ecosystem: {input_context.ecosystem or 'Unknown'}\n"
+            f"Confidence: {confidence_str}%  |  "
+            f"Region: {region_str}  |  "
+            f"Ecosystem: {ecosystem_str}\n"
             "=" * 60
         )
 
