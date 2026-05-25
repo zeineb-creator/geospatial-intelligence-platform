@@ -226,6 +226,4 @@ def populate_convenience_fields(ic: InputContext):
  
     if ic.ndvi_mean_t1 is not None and ic.ndvi_mean_t2 is not None:
         ic.ndvi_delta = ic.ndvi_mean_t2 - ic.ndvi_mean_t1
- 
-ic.climate_summary = build_climate_summary(ic.climate_df)
-populate_convenience_fields(ic)
+
