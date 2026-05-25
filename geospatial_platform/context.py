@@ -39,3 +39,8 @@ class InputContext:
     retrieved_context: Optional[str] = None
     final_report: Optional[str] = None
     confidence_score: Optional[float] = None
+
+    climate_summary: Optional[dict] = None
+    humidity_pct: Optional[float] = None
+    rainfall_trend: Optional[str] = None
+    water_pct: Optional[float] = None
