@@ -494,7 +494,8 @@ try:
 
         # ── Step 6 — Report generation ────────────────────────────────────────
         st.write("✍️ Generating scientific report…")
-        ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
+        rag_text = getattr(ic, 'retrieved_context', "") or getattr(ic, 'rag_context', "")
+        ic.report = generate_report(ic, rag_text, ic.anomalies or [])
 
     status.update(label="✅ Analysis complete", state="complete", expanded=False)
 
