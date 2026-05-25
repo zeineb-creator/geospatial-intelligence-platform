@@ -209,8 +209,7 @@ def build_climate_summary(df) -> dict:
         summary.update(_stats(col))
  
     return summary
- 
- 
+
 def populate_convenience_fields(ic: InputContext):
     """
     After building climate_summary, populate the convenience aliases
