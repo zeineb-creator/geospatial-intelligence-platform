@@ -23,10 +23,21 @@ class InputContext:
     ndwi: Optional[np.ndarray] = None
     ndbi: Optional[np.ndarray] = None
 
+    # Spectral index means and maps (for display and LLM)
+    ndvi_mean: Optional[float] = None
+    ndwi_mean: Optional[float] = None
+    ndbi_mean: Optional[float] = None
+    ndvi_map: Optional[np.ndarray] = None
+    ndwi_map: Optional[np.ndarray] = None
+    ndbi_map: Optional[np.ndarray] = None
+
     # Temporal analysis (populated when second image provided)
     ndvi_previous: Optional[np.ndarray] = None
     ndvi_trend: Optional[float] = None
     ndvi_trend_map: Optional[np.ndarray] = None  # pixel-level change map
+    ndvi_delta: Optional[float] = None
+    ndvi_mean_t1: Optional[float] = None
+    ndvi_mean_t2: Optional[float] = None
 
     # Derived metrics
     water_ratio: Optional[float] = None
@@ -37,10 +48,23 @@ class InputContext:
     land_cover: Optional[dict] = None
     anomalies: Optional[list] = field(default_factory=list)
     retrieved_context: Optional[str] = None
+    rag_context: Optional[str] = None  # Alias for retrieved_context
     final_report: Optional[str] = None
+    report: Optional[str] = None  # Alias for final_report
     confidence_score: Optional[float] = None
 
+    # Climate
     climate_summary: Optional[dict] = None
     humidity_pct: Optional[float] = None
     rainfall_trend: Optional[str] = None
     water_pct: Optional[float] = None
+    
+    # Region/Ecosystem
+    ecosystem: Optional[str] = None
+    region: Optional[str] = None
+    temporal_label_t1: Optional[str] = None
+    temporal_label_t2: Optional[str] = None
+    
+    # Second image data
+    image_array_t2: Optional[np.ndarray] = None
+    image_meta_t2: Optional[dict] = None
