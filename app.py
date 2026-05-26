@@ -204,12 +204,12 @@ with st.sidebar:
     # at all, so temporal labels in the report were always extracted from
     # filenames (fragile) or fell back to "Image 1 (earlier)" / "Image 2 (later)".
     # These date inputs populate ic.temporal_label_t1 / t2 reliably.
+    # Define your desired date range
+    min_date = date(1900, 1, 1)  # or whatever start year you want
+    max_date = date(2100, 12, 31)  # or whatever end year you want
     if uploaded_t1 or uploaded_t2:
         st.markdown("#### 📅 Acquisition Dates (optional)")
         col_d1, col_d2 = st.columns(2)
-        # Define your desired date range
-        min_date = date(1900, 1, 1)  # or whatever start year you want
-        max_date = date(2100, 12, 31)  # or whatever end year you want
         with col_d1:
             date_t1 = st.date_input("Image 1 date", value=None, key="date_t1", help="Date the primary image was acquired.", min_value=min_date, max_value=max_date)
         with col_d2:
