@@ -308,37 +308,113 @@ Explain the {confidence:.0f}% score. What would raise it? What are the main unce
     return prompt
 
 
+
+# ── Output validator ──────────────────────────────────────────────────────────
+
+def _validate_report(report_text: str) -> tuple[bool, list[str]]:
+    """
+    Check the LLM output meets minimum scientific quality standards.
+    Returns (is_valid, list_of_failures).
+    """
+    failures = []
+    text = report_text.lower()
+
+    # 1. Monitoring section must contain numerical thresholds
+    import re
+    monitoring_match = re.search(
+        r'## 8\..*?(?=## 9\.|$)', report_text, re.DOTALL | re.IGNORECASE
+    )
+    if monitoring_match:
+        monitoring_text = monitoring_match.group(0)
+        # Must have at least one number that looks like a threshold
+        has_threshold = bool(re.search(r'\b0\.\d+|\d+\.\d+%|below \d|above \d|threshold', monitoring_text))
+        has_frequency = any(w in monitoring_text.lower() for w in
+                           ['monthly', 'seasonal', 'annual', 'weekly', 'quarterly'])
+        if not has_threshold:
+            failures.append("Section 8 (Monitoring) is missing numerical thresholds")
+        if not has_frequency:
+            failures.append("Section 8 (Monitoring) is missing temporal frequency")
+    else:
+        failures.append("Section 8 (Monitoring) not found in output")
+
+    # 2. Must have all 9 sections
+    for i in range(1, 10):
+        if f'## {i}.' not in report_text and f'## {i} .' not in report_text:
+            failures.append(f"Section {i} missing from report")
+
+    # 3. Must not contain the "short record" hallucination or "not a reliable"
+    bad_phrases = [
+        "short climate record",
+        "short record",
+        "not a reliable indicator",
+        "provides valuable insights",
+        "it is worth noting",
+        "further study is needed",
+    ]
+    for phrase in bad_phrases:
+        if phrase in text:
+            failures.append(f"Forbidden phrase detected: \"{phrase}\"")
+
+    return len(failures) == 0, failures
+
+
+def _build_correction_prompt(original_report: str, failures: list[str]) -> str:
+    """Build a targeted correction prompt for failed sections only."""
+    failure_str = "\n".join(f"  - {f}" for f in failures)
+    return f"""The following geospatial report has quality issues that must be fixed:
+
+ISSUES TO FIX:
+{failure_str}
+
+SPECIFIC REQUIREMENTS FOR SECTION 8 (Monitoring Recommendations):
+Each of the 3 recommendations MUST follow this exact format:
+"Monitor [specific index] via [data source] at [monthly/seasonal/annual] frequency; \
+a value [below/above] [specific number] would indicate [specific ecological consequence] \
+requiring [specific action]."
+
+Example of acceptable recommendation:
+"Monitor Sentinel-2 NDVI monthly composites (April–May growing season window); \
+a mean value below 0.10 — below the 5th percentile for Mediterranean coastal shrubland — \
+would indicate severe drought stress requiring assessment of emergency irrigation or \
+reforestation programme suspension."
+
+REMOVE any sentences containing these forbidden phrases:
+- "short climate record" or "short record" (the record is 15 years — not short)
+- "not a reliable indicator"
+- "provides valuable insights"
+- "it is worth noting"
+
+ORIGINAL REPORT TO FIX:
+{original_report}
+
+Return the complete corrected report with all 9 sections. Fix ONLY the issues listed above.
+Keep all other content unchanged."""
+
+
 # ── Main generation function ──────────────────────────────────────────────────
 
 def generate_report(input_context, rag_context: str, anomalies: list) -> str:
     client = get_groq_client()
     prompt = build_prompt(input_context, rag_context, anomalies)
 
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a senior environmental scientist writing peer-review-quality reports. "
-                        "You interpret data — you never restate it. "
-                        "You explain physical mechanisms — you never use vague causal language. "
-                        "You give specific, actionable recommendations with numerical thresholds. "
-                        "You never dismiss a validated index as 'unreliable'."
-                    )
-                },
-                {"role": "user", "content": prompt}
-            ],
+    system_msg = (
+        "You are a senior environmental scientist writing peer-review-quality reports. "
+        "You interpret data — you never restate it. "
+        "You explain physical mechanisms — you never use vague causal language. "
+        "You give specific, actionable recommendations with numerical thresholds. "
+        "You never dismiss a validated index as 'unreliable'."
+    )
+
+    def _call_llm(messages):
+        return client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
             temperature=0.25,
-            max_tokens=1800,
-        )
+            max_tokens=2400,
+        ).choices[0].message.content.strip()
 
-        report_text = response.choices[0].message.content.strip()
-
-        # Wrap with header/footer
+    def _wrap(text):
         header = "=" * 60 + "\nGEOSPATIAL INTELLIGENCE REPORT\n" + "=" * 60 + "\n\n"
-
         conf_s = f"{input_context.confidence_score:.0f}" if input_context.confidence_score is not None else "N/A"
         footer = (
             "\n\n" + "=" * 60 + "\n"
@@ -347,8 +423,42 @@ def generate_report(input_context, rag_context: str, anomalies: list) -> str:
             f"Ecosystem: {input_context.ecosystem or 'Unknown'}\n"
             + "=" * 60
         )
+        return header + text + footer
 
-        return header + report_text + footer
+    try:
+        # ── Attempt 1: standard generation ───────────────────────────────────
+        report_text = _call_llm([
+            {"role": "system", "content": system_msg},
+            {"role": "user",   "content": prompt},
+        ])
+
+        is_valid, failures = _validate_report(report_text)
+
+        if is_valid:
+            print(f"  [LLM] Report passed validation on first attempt.")
+            return _wrap(report_text)
+
+        # ── Attempt 2: targeted correction ────────────────────────────────────
+        print(f"  [LLM] Validation failed ({len(failures)} issues). Retrying with correction prompt...")
+        for f in failures:
+            print(f"    ✗ {f}")
+
+        correction_prompt = _build_correction_prompt(report_text, failures)
+        report_text_v2 = _call_llm([
+            {"role": "system", "content": system_msg},
+            {"role": "user",   "content": correction_prompt},
+        ])
+
+        is_valid_v2, failures_v2 = _validate_report(report_text_v2)
+        if is_valid_v2:
+            print(f"  [LLM] Report passed validation after correction.")
+        else:
+            print(f"  [LLM] Report still has issues after correction ({len(failures_v2)} remaining):")
+            for f in failures_v2:
+                print(f"    ✗ {f}")
+            # Return corrected version anyway — it will be better than the original
+
+        return _wrap(report_text_v2)
 
     except Exception as e:
         return f"[Report generation failed: {e}]"
