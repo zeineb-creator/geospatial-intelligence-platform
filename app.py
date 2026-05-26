@@ -337,13 +337,21 @@ try:
         if path_t2 and getattr(ic, 'image_array_t2', None) is not None:
             st.write("📅 Computing temporal NDVI delta…")
             from geospatial_platform.image_processor import (
-                compute_ndvi, detect_sensor, BAND_CONFIG, is_prescaled
+                compute_ndvi, detect_sensor, BAND_CONFIG,
+                is_prescaled, get_band, normalize_to_reflectance
             )
-            arr2     = ic.image_array_t2
-            sensor2  = detect_sensor(arr2.shape[0])
-            config2  = BAND_CONFIG[sensor2]
-            pre2     = is_prescaled(arr2)
-            ndvi_t2  = compute_ndvi(arr2, config2, prescaled=pre2)
+            arr2    = ic.image_array_t2
+            sensor2 = detect_sensor(arr2.shape[0])
+            config2 = BAND_CONFIG[sensor2]
+            pre2    = is_prescaled(arr2)
+
+            # New API: compute_ndvi(red, nir) — extract bands first
+            red2  = get_band(arr2, config2, "red")
+            nir2  = get_band(arr2, config2, "nir")
+            if red2 is not None and nir2 is not None:
+                red2 = normalize_to_reflectance(red2, pre2)
+                nir2 = normalize_to_reflectance(nir2, pre2)
+            ndvi_t2 = compute_ndvi(red2, nir2)
 
             if ndvi_t2 is not None and not np.all(np.isnan(ndvi_t2)):
                 mean_t1 = float(np.nanmean(ic.ndvi)) if ic.ndvi is not None else None
