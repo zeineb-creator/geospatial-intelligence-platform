@@ -1,6 +1,3 @@
-"""
-app.py — Multimodal Geospatial Intelligence Platform
-"""
 
 import streamlit as st
 import numpy as np
@@ -333,6 +330,42 @@ try:
         st.write("🔬 Computing spectral indices (NDVI · NDWI · NDBI)…")
         ic = process_image(ic)
 
+        # ── Step 2b — Temporal NDVI from second image ─────────────────────────
+        if path_t2 and getattr(ic, 'image_array_t2', None) is not None:
+            st.write("📅 Computing temporal NDVI delta…")
+            from geospatial_platform.image_processor import (
+                compute_ndvi, detect_sensor, BAND_CONFIG, is_prescaled
+            )
+            arr2     = ic.image_array_t2
+            sensor2  = detect_sensor(arr2.shape[0])
+            config2  = BAND_CONFIG[sensor2]
+            pre2     = is_prescaled(arr2)
+            ndvi_t2  = compute_ndvi(arr2, config2, prescaled=pre2)
+
+            if ndvi_t2 is not None and not np.all(np.isnan(ndvi_t2)):
+                mean_t1 = float(np.nanmean(ic.ndvi)) if ic.ndvi is not None else None
+                mean_t2 = float(np.nanmean(ndvi_t2))
+                ic.ndvi_mean_t1   = mean_t1
+                ic.ndvi_mean_t2   = mean_t2
+                ic.ndvi_delta     = round(mean_t2 - mean_t1, 4) if mean_t1 is not None else None
+
+                # Extract year labels from filenames (e.g. "2010_nabeul.tif" → "2010")
+                import re as _re
+                def _year_from_name(fname):
+                    m = _re.search(r'(19|20)\d{2}', fname or '')
+                    return m.group(0) if m else None
+
+                ic.temporal_label_t1 = _year_from_name(uploaded_t1.name) or "Image 1 (earlier)"
+                ic.temporal_label_t2 = _year_from_name(uploaded_t2.name) or "Image 2 (later)"
+
+                # Flag vegetation change anomaly
+                if ic.ndvi_delta is not None and abs(ic.ndvi_delta) > 0.05:
+                    direction = "improvement" if ic.ndvi_delta > 0 else "decline"
+                    ic.anomalies = list(ic.anomalies or [])
+                    ic.anomalies.append(
+                        f"vegetation {direction} detected (ΔNDVI={ic.ndvi_delta:+.3f})"
+                    )
+
         # ── Step 3 — ViT feature extraction ──────────────────────────────────
         st.write("🧠 Extracting Vision Transformer features…")
         ic = extract_vit_features(ic)
@@ -376,6 +409,17 @@ try:
         if not getattr(ic, 'ecosystem', None):
             ic.ecosystem = ic.image_meta.get("ecosystem", "Mixed landscape")
 
+        # ── Confidence score ──────────────────────────────────────────────────
+        if ic.confidence_score is None:
+            score = 0.0
+            if ic.ndvi is not None:           score += 20
+            if ic.ndwi is not None:           score += 15
+            if ic.ndbi is not None:           score += 10
+            if ic.aridity_index is not None:  score += 10
+            if getattr(ic, 'csv_df', None) is not None: score += 20
+            if ic.ndvi_delta is not None:     score += 15
+            ic.confidence_score = min(85.0, score)
+
         # ── Step 6 — Report generation ────────────────────────────────────────
         st.write("✍️ Generating scientific report…")
         ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
@@ -403,8 +447,8 @@ finally:
 # RESULTS DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_overview, tab_maps, tab_report, tab_raw = st.tabs([
-    "  📊 Overview  ", "  🗺️ Index Maps  ", "  📄 Full Report  ", "  🔩 Raw Data  ",
+tab_overview, tab_maps, tab_report = st.tabs([
+    "  📊 Overview  ", "  🗺️ Index Maps  ", "  📄 Full Report  ",
 ])
 
 
@@ -589,8 +633,10 @@ with tab_report:
     if not report:
         st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">Report not generated.</div>', unsafe_allow_html=True)
     else:
-        report_body = re.sub(r'^={20,}.*?={20,}\n', '', report, flags=re.DOTALL).strip()
-        report_body = re.sub(r'\n={20,}.*$', '', report_body, flags=re.DOTALL).strip()
+        # Strip header (everything up to and including the second ===== line)
+        report_body = re.sub(r'^=+\n[^\n]+\n=+\n+', '', report).strip()
+        # Strip footer (from the first ===== that follows the body)
+        report_body = re.sub(r'\n=+\nConfidence:.*$', '', report_body, flags=re.DOTALL).strip()
         sections = parse_report_sections(report_body)
         if sections:
             for title, content in sections.items():
@@ -607,31 +653,3 @@ with tab_report:
                 file_name=f"geointel_{region_str.replace(' ','_').replace(',','')}.txt",
                 mime="text/plain",
             )
-
-
-# ── TAB 4 — RAW DATA ─────────────────────────────────────────────────────────
-
-with tab_raw:
-    st.markdown("## Raw Pipeline Data")
-
-    with st.expander("📚 Retrieved RAG Context"):
-        st.code(getattr(ic, 'rag_context', None) or "None", language=None)
-
-    with st.expander("🌡️ Climate Summary"):
-        cs = getattr(ic, 'climate_summary', None)
-        if cs: st.json(cs)
-        else:  st.caption("No climate data.")
-
-    with st.expander("📋 InputContext Fields"):
-        OMIT = {"ndvi_map","ndwi_map","ndbi_map","vit_features",
-                "image_array","image_array_t2","climate_df","csv_df","ndvi","ndwi","ndbi"}
-        safe = {}
-        for k, v in vars(ic).items():
-            if k in OMIT:
-                safe[k] = f"<{type(v).__name__} — omitted>"
-            else:
-                safe[k] = str(v) if not isinstance(v, (str, int, float, bool, type(None), dict, list)) else v
-        st.json(safe)
-
-    with st.expander("📝 Raw LLM Report"):
-        st.code(getattr(ic, 'report', '') or "None", language=None)
