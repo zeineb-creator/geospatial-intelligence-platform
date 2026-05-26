@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-import sys
-sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
@@ -74,14 +72,12 @@ def build_reliability_report(flags: dict) -> str:
     """
     lines = ["DATA RELIABILITY ASSESSMENT:"]
 
-    # Imagery
     lines.append("\n  Imagery:")
     lines.append(f"    NDVI available        : {'Yes' if flags['has_ndvi'] else 'No'}")
     lines.append(f"    NDWI available        : {'Yes' if flags['has_ndwi'] else 'No'}")
     lines.append(f"    NDBI available        : {'Yes' if flags['has_ndbi'] else 'No'}")
     lines.append(f"    Temporal NDVI         : {'Yes' if flags['has_temporal_ndvi'] else 'No — single image only'}")
 
-    # Climate
     lines.append("\n  Climate data:")
     if flags["has_climate_data"]:
         lines.append(f"    Years available       : {flags['climate_years']}")
@@ -92,7 +88,6 @@ def build_reliability_report(flags: dict) -> str:
     else:
         lines.append("    No climate data provided")
 
-    # Capabilities
     lines.append("\n  Analysis capabilities:")
     lines.append(f"    Vegetation change     : {'Enabled' if flags['can_detect_change'] else 'Disabled — no temporal data'}")
     lines.append(f"    Drought assessment    : {'Enabled' if flags['can_assess_drought'] else 'Partial — missing rainfall or NDVI'}")
