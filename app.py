@@ -503,7 +503,7 @@ with tab_overview:
 
         land_cover = getattr(ic, 'land_cover', None)
         if land_cover:
-            st.markdown("## Land Cover")
+            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:1.05rem;font-weight:600;color:#2563eb;border-bottom:1px solid #dde3ed;padding-bottom:0.4rem;margin:1rem 0 0.6rem 0;">Land Cover</div>', unsafe_allow_html=True)
             st.markdown(render_land_cover_bar(land_cover), unsafe_allow_html=True)
             lc_cols = st.columns(4)
             lc_colors = {"water":"#3b82f6","vegetation":"#22c55e","urban":"#f59e0b","barren":"#94a3b8"}
