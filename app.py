@@ -342,7 +342,9 @@ try:
             st.write("📊 Integrating NASA POWER climate data…")
             ic = integrate_data(ic)
             if build_climate_summary and populate_convenience_fields:
-                df = getattr(ic, 'csv_df', None) or getattr(ic, 'climate_df', None)
+                df = getattr(ic, 'csv_df', None)
+                if df is None:
+                    df = getattr(ic, 'climate_df', None)
                 if df is not None:
                     ic.climate_summary = build_climate_summary(df)
                     populate_convenience_fields(ic)
