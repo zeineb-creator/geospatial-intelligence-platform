@@ -204,16 +204,37 @@ with st.sidebar:
     # at all, so temporal labels in the report were always extracted from
     # filenames (fragile) or fell back to "Image 1 (earlier)" / "Image 2 (later)".
     # These date inputs populate ic.temporal_label_t1 / t2 reliably.
-    if uploaded_t1 or uploaded_t2:
-        st.markdown("#### 📅 Acquisition Dates (optional)")
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            date_t1 = st.date_input("Image 1 date", value=None, key="date_t1", help="Date the primary image was acquired.")
-        with col_d2:
-            date_t2 = st.date_input("Image 2 date", value=None, key="date_t2", help="Date the second image was acquired.")
-    else:
-        date_t1 = None
-        date_t2 = None
+    from datetime import date
+
+if uploaded_t1 or uploaded_t2:
+    st.markdown("#### 📅 Acquisition Dates (optional)")
+    col_d1, col_d2 = st.columns(2)
+    
+    # Define your desired date range
+    min_date = date(1900, 1, 1)  # or whatever start year you want
+    max_date = date(2100, 12, 31)  # or whatever end year you want
+    
+    with col_d1:
+        date_t1 = st.date_input(
+            "Image 1 date", 
+            value=None, 
+            key="date_t1", 
+            help="Date the primary image was acquired.",
+            min_value=min_date,
+            max_value=max_date
+        )
+    with col_d2:
+        date_t2 = st.date_input(
+            "Image 2 date", 
+            value=None, 
+            key="date_t2", 
+            help="Date the second image was acquired.",
+            min_value=min_date,
+            max_value=max_date
+        )
+else:
+    date_t1 = None
+    date_t2 = None
 
     st.markdown("### 📊 Climate Data")
     uploaded_csv = st.file_uploader("Climate data CSV — optional", type=["csv"], key="csv", help="15-year monthly climate data from NASA POWER API.")
