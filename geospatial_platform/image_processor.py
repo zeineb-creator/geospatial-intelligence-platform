@@ -1,95 +1,29 @@
-"""
-image_processor.py — Sensor-agnostic land cover classification
-==============================================================
-Approach: Multi-index ensemble with soft voting.
-
-Instead of relying on a single index (NDBI) with a fixed threshold,
-this module:
-  1. Detects sensor type and maps bands correctly
-  2. Computes every spectral index available for that sensor
-  3. Scores each pixel across all indices using soft membership functions
-  4. Votes across indices to produce a final classification
-
-This is sensor-agnostic because normalised indices (NDVI, BSI, MNDWI, etc.)
-cancel out radiometric differences between Sentinel-2, Landsat 5/7/8/9, and
-generic multispectral sensors.
-"""
-
 import numpy as np
-import sys
-sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SENSOR BAND CONFIGURATIONS
-# Keys: blue, green, red, nir, swir1, swir2 (0-indexed band positions)
-# None = band not available for that sensor
-# ══════════════════════════════════════════════════════════════════════════════
-
-BAND_CONFIG = {
-    # Sentinel-2 L2A — 13 bands (10m+20m+60m resampled)
-    "sentinel2": {
-        "blue": 1, "green": 2, "red": 3, "nir": 7,
-        "swir1": 10, "swir2": 11,
-    },
-    # Sentinel-2 L2A — 6-band export (Blue/Green/Red/NIR/SWIR1/SWIR2)
-    "sentinel2_6band": {
-        "blue": 0, "green": 1, "red": 2, "nir": 3,
-        "swir1": 4, "swir2": 5,
-    },
-    # Landsat 8/9 OLI (bands 1-7 exported as 0-indexed)
-    "landsat8": {
-        "blue": 1, "green": 2, "red": 3, "nir": 4,
-        "swir1": 5, "swir2": 6,
-    },
-    # Landsat 5/7 TM (bands 1-7, band 6 thermal omitted)
-    "landsat5": {
-        "blue": 0, "green": 1, "red": 2, "nir": 3,
-        "swir1": 4, "swir2": 5,
-    },
-    # Landsat 7 ETM+ (same layout as Landsat 5 for optical)
-    "landsat7": {
-        "blue": 0, "green": 1, "red": 2, "nir": 3,
-        "swir1": 4, "swir2": 5,
-    },
-    # Generic 4-band (B/G/R/NIR — no SWIR)
-    "generic4": {
-        "blue": 0, "green": 1, "red": 2, "nir": 3,
-        "swir1": None, "swir2": None,
-    },
-    # RGB only — no NIR, no SWIR
-    "rgb": {
-        "blue": 2, "green": 1, "red": 0,
-        "nir": None, "swir1": None, "swir2": None,
-    },
-}
-
 NODATA_THRESHOLD = -0.25
 
+BAND_CONFIG = {
+    "sentinel2":       {"red": 3,  "green": 2, "blue": 1, "nir": 7,  "swir": 10},
+    "sentinel2_6band": {"red": 2,  "green": 1, "blue": 0, "nir": 3,  "swir": 4},
+    "landsat8":        {"red": 3,  "green": 2, "blue": 1, "nir": 4,  "swir": 5},
+    "generic4":        {"red": 0,  "green": 1, "blue": 2, "nir": 3,  "swir": None},
+    "rgb":             {"red": 0,  "green": 1, "blue": 2, "nir": None,"swir": None},
+}
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SENSOR DETECTION
-# ══════════════════════════════════════════════════════════════════════════════
 
-def detect_sensor(n_bands: int, meta: dict = None) -> str:
-    """
-    Infer sensor from band count.
-    If meta contains a 'sensor' key it takes priority.
-    """
-    if meta and meta.get("sensor"):
-        return meta["sensor"]
-    if n_bands == 3:   return "rgb"
-    if n_bands == 4:   return "generic4"
-    if n_bands == 6:   return "sentinel2_6band"
-    if n_bands == 7:   return "landsat8"
-    if n_bands >= 13:  return "sentinel2"
-    return "generic4"
+def detect_sensor(n_bands: int) -> str:
+    if n_bands == 3:    return "rgb"
+    elif n_bands == 4:  return "generic4"
+    elif n_bands == 6:  return "sentinel2_6band"
+    elif n_bands == 7:  return "landsat8"
+    elif n_bands >= 13: return "sentinel2"
+    else:               return "generic4"
 
 
 def is_prescaled(array: np.ndarray) -> bool:
-    """True if values are already in reflectance [0, 1]."""
+    """Detect if image is already in reflectance [0,1] range."""
     valid = array[~np.isnan(array)]
     valid = valid[valid > -999]
     if len(valid) == 0:
@@ -97,276 +31,168 @@ def is_prescaled(array: np.ndarray) -> bool:
     return float(valid.max()) <= 1.5 and float(valid.min()) >= -0.5
 
 
-def get_band(array: np.ndarray, config: dict, name: str) -> np.ndarray | None:
-    """Safely extract a band by logical name. Returns None if not available."""
-    idx = config.get(name)
-    if idx is None or idx >= array.shape[0]:
-        return None
-    b = array[idx].astype(np.float32).copy()
-    b[b <= NODATA_THRESHOLD] = np.nan
-    return b
-
-
-def normalize_to_reflectance(band: np.ndarray, prescaled: bool) -> np.ndarray:
-    """Scale to [0, 1] if not already reflectance."""
+def normalize_band(band: np.ndarray, prescaled: bool = False) -> np.ndarray:
     if prescaled:
-        return np.clip(band, 0.0, 1.0)
-    mn, mx = np.nanmin(band), np.nanmax(band)
-    if mx - mn < 1e-6:
-        return np.zeros_like(band)
-    return np.clip((band - mn) / (mx - mn), 0.0, 1.0).astype(np.float32)
+        return np.clip(band, 0, 1).astype(np.float32)
+    min_val, max_val = np.nanmin(band), np.nanmax(band)
+    if max_val - min_val == 0:
+        return np.zeros_like(band, dtype=np.float32)
+    return ((band - min_val) / (max_val - min_val)).astype(np.float32)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SPECTRAL INDEX COMPUTATION (all sensor-agnostic)
-# ══════════════════════════════════════════════════════════════════════════════
+def mask_nodata(array: np.ndarray) -> np.ndarray:
+    masked = array.astype(np.float32).copy()
+    masked[masked <= NODATA_THRESHOLD] = np.nan
+    return masked
 
-def _ratio(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """(a - b) / (a + b), clipped to [-1, 1], NaN where denominator ~0."""
+
+def safe_index(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     denom = a + b
     with np.errstate(invalid="ignore", divide="ignore"):
         result = np.where(
-            (np.abs(denom) < 1e-8) | np.isnan(denom),
+            (np.abs(denom) < 1e-10) | np.isnan(denom),
             np.nan,
-            (a - b) / denom,
+            (a - b) / denom
         )
     return np.clip(result, -1.0, 1.0).astype(np.float32)
 
-
-def compute_ndvi(red, nir):
-    """Normalised Difference Vegetation Index — vegetation signal."""
-    if red is None or nir is None:
+def compute_ndvi(array, config, prescaled=True):
+    if config["nir"] is None:
         return None
-    return _ratio(nir, red)
+    nir = array[config["nir"]].astype(np.float32).copy()
+    red = array[config["red"]].astype(np.float32).copy()
+    if prescaled:
+        nir[nir <= NODATA_THRESHOLD] = np.nan
+        red[red <= NODATA_THRESHOLD] = np.nan
+        nir = np.where(np.isnan(nir), np.nan, np.clip(nir, 0, 1))
+        red = np.where(np.isnan(red), np.nan, np.clip(red, 0, 1))
+    else:
+        nir = normalize_band(nir)
+        red = normalize_band(red)
+    return safe_index(nir, red)
 
 
-def compute_ndwi(green, nir):
-    """Normalised Difference Water Index (McFeeters) — open water."""
-    if green is None or nir is None:
+def compute_ndwi(array, config, prescaled=True):
+    if config["nir"] is None:
         return None
-    return _ratio(green, nir)
+    green = array[config["green"]].astype(np.float32).copy()
+    nir   = array[config["nir"]].astype(np.float32).copy()
+    if prescaled:
+        green[green <= NODATA_THRESHOLD] = np.nan
+        nir[nir     <= NODATA_THRESHOLD] = np.nan
+        green = np.where(np.isnan(green), np.nan, np.clip(green, 0, 1))
+        nir   = np.where(np.isnan(nir),   np.nan, np.clip(nir,   0, 1))
+    else:
+        green = normalize_band(green)
+        nir   = normalize_band(nir)
+    return safe_index(green, nir)
 
 
-def compute_mndwi(green, swir1):
-    """Modified NDWI (Xu 2006) — better water/urban separation than NDWI."""
-    if green is None or swir1 is None:
+def compute_ndbi(array, config, prescaled=True):
+    if config["swir"] is None or config["nir"] is None:
         return None
-    return _ratio(green, swir1)
+    swir = array[config["swir"]].astype(np.float32).copy()
+    nir  = array[config["nir"]].astype(np.float32).copy()
+    if prescaled:
+        swir[swir <= NODATA_THRESHOLD] = np.nan
+        nir[nir   <= NODATA_THRESHOLD] = np.nan
+        swir = np.where(np.isnan(swir), np.nan, np.clip(swir, 0, 1))
+        nir  = np.where(np.isnan(nir),  np.nan, np.clip(nir,  0, 1))
+    else:
+        swir = normalize_band(swir)
+        nir  = normalize_band(nir)
+    return safe_index(swir, nir)
 
 
-def compute_ndbi(swir1, nir):
-    """Normalised Difference Built-up Index."""
-    if swir1 is None or nir is None:
-        return None
-    return _ratio(swir1, nir)
-
-
-def compute_bsi(blue, red, nir, swir1):
+def compute_cover_percentages(feature_maps: dict, total_pixels: int,
+                               height: int = None, width: int = None) -> dict:
     """
-    Bare Soil Index — separates bare/urban from vegetation.
-    BSI = ((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))
+    Mutually exclusive land cover — water > vegetation > urban > barren.
+    Uses actual image dimensions instead of assuming square.
     """
-    if any(b is None for b in [blue, red, nir, swir1]):
-        return None
-    num = (swir1 + red) - (nir + blue)
-    den = (swir1 + red) + (nir + blue)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        result = np.where(np.abs(den) < 1e-8, np.nan, num / den)
-    return np.clip(result, -1.0, 1.0).astype(np.float32)
+    if height is None or width is None:
+        side   = int(total_pixels ** 0.5)
+        height = width = side
+
+    classified = np.zeros((height, width), dtype=np.uint8)
+
+    priority = ["water_mask", "vegetation_mask", "urban_mask"]
+    labels   = {"water_mask": "water", "vegetation_mask": "vegetation", "urban_mask": "urban"}
+    codes    = {"water_mask": 1, "vegetation_mask": 2, "urban_mask": 3}
+
+    for mask_name in priority:
+        if mask_name in feature_maps:
+            mask = feature_maps[mask_name]
+            if mask.shape == (height, width):
+                classified[mask.astype(bool) & (classified == 0)] = codes[mask_name]
+            else:
+                print(f"  [WARNING] Mask shape {mask.shape} != image shape ({height},{width}) — skipping {mask_name}")
+
+    percentages = {}
+    for mask_name in priority:
+        pct = round(float((classified == codes[mask_name]).sum()) / total_pixels * 100, 2)
+        percentages[labels[mask_name]] = pct
+
+    percentages["barren"] = round(float((classified == 0).sum()) / total_pixels * 100, 2)
+    return percentages
 
 
-def compute_ui(swir2, nir):
-    """Urban Index — SWIR2/NIR ratio, high for impervious surfaces."""
-    if swir2 is None or nir is None:
-        return None
-    return _ratio(swir2, nir)
-
-
-def compute_evi2(red, nir):
-    """Two-band EVI — robust vegetation index for bright surfaces."""
-    if red is None or nir is None:
-        return None
-    with np.errstate(invalid="ignore", divide="ignore"):
-        result = 2.5 * (nir - red) / (nir + 2.4 * red + 1.0)
-    return np.clip(result, -1.0, 1.0).astype(np.float32)
-
-
-def compute_savi(red, nir, L=0.5):
-    """Soil-Adjusted Vegetation Index — reduces soil background effect."""
-    if red is None or nir is None:
-        return None
-    with np.errstate(invalid="ignore", divide="ignore"):
-        result = ((nir - red) / (nir + red + L)) * (1 + L)
-    return np.clip(result, -1.0, 1.0).astype(np.float32)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SOFT MEMBERSHIP FUNCTIONS
-# ══════════════════════════════════════════════════════════════════════════════
-# Each function returns a [0, 1] "probability of belonging to class X" per pixel.
-# This is the core of the sensor-agnostic approach: instead of hard thresholds,
-# we use smooth sigmoid-based transitions that are robust to sensor radiometry.
-
-def _sigmoid(x: np.ndarray, center: float, slope: float) -> np.ndarray:
-    """Logistic function: 0 below center, 1 above center."""
-    return (1.0 / (1.0 + np.exp(-slope * (x - center)))).astype(np.float32)
-
-
-def _inv_sigmoid(x: np.ndarray, center: float, slope: float) -> np.ndarray:
-    return 1.0 - _sigmoid(x, center, slope)
-
-
-def _bell(x: np.ndarray, center: float, width: float) -> np.ndarray:
-    """Bell curve peaking at center."""
-    return np.exp(-0.5 * ((x - center) / (width + 1e-8)) ** 2).astype(np.float32)
-
-
-def _safe(arr):
-    """Replace NaN with 0 for membership calculation."""
-    return np.nan_to_num(arr, nan=0.0)
-
-
-def water_score(ndwi, mndwi, ndvi) -> np.ndarray:
-    """High score = likely water."""
-    scores = []
-    if ndwi is not None:
-        scores.append(_sigmoid(_safe(ndwi), center=0.0, slope=20))
-    if mndwi is not None:
-        # MNDWI is more reliable — give it higher weight
-        scores.append(_sigmoid(_safe(mndwi), center=0.05, slope=20) * 1.5)
-    if ndvi is not None:
-        # Water has very low NDVI — negative correlation
-        scores.append(_inv_sigmoid(_safe(ndvi), center=0.1, slope=20) * 0.5)
-    if not scores:
-        return np.zeros(1)
-    total_weight = 1.0 + (1.5 if mndwi is not None else 0) + (0.5 if ndvi is not None else 0)
-    return np.clip(np.sum(scores, axis=0) / total_weight, 0, 1)
-
-
-def vegetation_score(ndvi, evi2, savi, mndwi) -> np.ndarray:
-    """High score = likely vegetation."""
-    scores = []
-    if ndvi is not None:
-        scores.append(_sigmoid(_safe(ndvi), center=0.15, slope=25))
-    if evi2 is not None:
-        scores.append(_sigmoid(_safe(evi2), center=0.1, slope=25))
-    if savi is not None:
-        scores.append(_sigmoid(_safe(savi), center=0.12, slope=25) * 0.8)
-    if mndwi is not None:
-        # Vegetation has negative MNDWI — penalise high MNDWI
-        scores.append(_inv_sigmoid(_safe(mndwi), center=0.0, slope=15) * 0.5)
-    if not scores:
-        return np.zeros(1)
-    total_weight = (1 + (1 if evi2 is not None else 0) +
-                    (0.8 if savi is not None else 0) +
-                    (0.5 if mndwi is not None else 0))
-    return np.clip(np.sum(scores, axis=0) / total_weight, 0, 1)
-
-
-def urban_score(ndbi, bsi, ui, mndwi, ndvi) -> np.ndarray:
-    """
-    High score = likely urban/built-up.
-    Uses BSI and UI as primary signals — more reliable than NDBI alone
-    because BSI uses 4 bands and UI uses SWIR2 (very sensitive to impervious surfaces).
-    """
-    scores = []
-    weights = []
-
-    if ndbi is not None:
-        scores.append(_sigmoid(_safe(ndbi), center=0.0, slope=15))
-        weights.append(1.0)
-
-    if bsi is not None:
-        # BSI is the best single indicator for bare/urban across sensors
-        scores.append(_sigmoid(_safe(bsi), center=0.0, slope=20))
-        weights.append(2.0)  # double weight
-
-    if ui is not None:
-        scores.append(_sigmoid(_safe(ui), center=0.0, slope=15))
-        weights.append(1.5)
-
-    if mndwi is not None:
-        # Urban has negative MNDWI (unlike water which is positive)
-        scores.append(_inv_sigmoid(_safe(mndwi), center=0.0, slope=15) * 0.8)
-        weights.append(0.8)
-
-    if ndvi is not None:
-        # Urban has low NDVI
-        scores.append(_inv_sigmoid(_safe(ndvi), center=0.2, slope=20) * 0.6)
-        weights.append(0.6)
-
-    if not scores:
-        return np.zeros(1)
-
-    weighted_sum = sum(s * w for s, w in zip(scores, weights))
-    return np.clip(weighted_sum / sum(weights), 0, 1)
-
-
-def barren_score(ndvi, bsi, mndwi) -> np.ndarray:
-    """High score = likely bare soil / barren."""
-    scores = []
-    if ndvi is not None:
-        # Barren = low NDVI
-        scores.append(_inv_sigmoid(_safe(ndvi), center=0.1, slope=20))
-    if bsi is not None:
-        # BSI peaks for bare soil — bell around 0.1
-        scores.append(_bell(_safe(bsi), center=0.1, width=0.2))
-    if mndwi is not None:
-        # Barren is negative MNDWI (dry) but not as negative as urban
-        scores.append(_bell(_safe(mndwi), center=-0.15, width=0.2))
-    if not scores:
-        return np.zeros(1)
-    return np.clip(np.mean(scores, axis=0), 0, 1)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ENSEMBLE CLASSIFIER
-# ══════════════════════════════════════════════════════════════════════════════
-
-def classify_ensemble(indices: dict) -> np.ndarray:
-    """
-    Soft-vote classification returning a (H, W) label array.
-    Labels: 1=water, 2=vegetation, 3=urban, 4=barren
-    """
-    ndvi   = indices.get("ndvi")
-    ndwi   = indices.get("ndwi")
-    mndwi  = indices.get("mndwi")
-    ndbi   = indices.get("ndbi")
-    bsi    = indices.get("bsi")
-    ui     = indices.get("ui")
-    evi2   = indices.get("evi2")
-    savi   = indices.get("savi")
-
-    # Compute soft membership for each class
-    w_water = water_score(ndwi, mndwi, ndvi)
-    w_veg   = vegetation_score(ndvi, evi2, savi, mndwi)
-    w_urban = urban_score(ndbi, bsi, ui, mndwi, ndvi)
-    w_bare  = barren_score(ndvi, bsi, mndwi)
-
-    # Stack scores and take argmax
-    scores = np.stack([w_water, w_veg, w_urban, w_bare], axis=0)
-    labels = np.argmax(scores, axis=0).astype(np.uint8) + 1  # 1-indexed
-    # Label map: 1=water, 2=vegetation, 3=urban, 4=barren
-
-    return labels, scores
-
-
-def compute_cover_percentages(labels: np.ndarray) -> dict:
-    """Convert label map to percentage coverage dict."""
-    total = labels.size
+def compute_vegetation_breakdown(ndvi: np.ndarray, total_pixels: int) -> dict:
+    valid = ndvi[~np.isnan(ndvi)]
+    if len(valid) == 0:
+        return {"sparse_pct": 0.0, "moderate_pct": 0.0, "dense_pct": 0.0}
+    sparse   = ((valid > 0.1)  & (valid <= 0.25)).sum()
+    moderate = ((valid > 0.25) & (valid <= 0.45)).sum()
+    dense    = (valid > 0.45).sum()
     return {
-        "water":      round(float((labels == 1).sum()) / total * 100, 2),
-        "vegetation": round(float((labels == 2).sum()) / total * 100, 2),
-        "urban":      round(float((labels == 3).sum()) / total * 100, 2),
-        "barren":     round(float((labels == 4).sum()) / total * 100, 2),
+        "sparse_pct":   round(float(sparse)   / total_pixels * 100, 2),
+        "moderate_pct": round(float(moderate) / total_pixels * 100, 2),
+        "dense_pct":    round(float(dense)    / total_pixels * 100, 2),
     }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# AUXILIARY METRICS
-# ══════════════════════════════════════════════════════════════════════════════
+def detect_flood(ndwi: np.ndarray, total_pixels: int) -> float:
+    valid = ndwi[~np.isnan(ndwi)]
+    if len(valid) == 0:
+        return 0.0
+    return round(float((valid > 0.3).sum()) / total_pixels, 4)
 
-def compute_aridity_index(context: InputContext) -> float | None:
+
+def generate_feature_maps(array: np.ndarray, config: dict,
+                           prescaled: bool = True) -> dict:
+    maps = {}
+    ndvi = compute_ndvi(array, config, prescaled=prescaled)
+    ndwi = compute_ndwi(array, config, prescaled=prescaled)
+    ndbi = compute_ndbi(array, config, prescaled=prescaled)
+
+    if ndvi is not None:
+        valid_ndvi    = np.where(np.isnan(ndvi), 0, ndvi)
+        veg_mean      = float(np.nanmean(ndvi)) if not np.all(np.isnan(ndvi)) else 0.0
+        veg_std       = float(np.nanstd(ndvi))  if not np.all(np.isnan(ndvi)) else 0.0
+        veg_threshold = max(0.1, veg_mean + 0.3 * veg_std)
+        maps["vegetation_mask"] = (valid_ndvi > veg_threshold).astype(np.uint8)
+        print(f"  NDVI adaptive threshold: {veg_threshold:.3f}")
+
+    if ndwi is not None:
+        valid_ndwi      = np.where(np.isnan(ndwi), 0, ndwi)
+        water_mean      = float(np.nanmean(ndwi)) if not np.all(np.isnan(ndwi)) else 0.0
+        water_std       = float(np.nanstd(ndwi))  if not np.all(np.isnan(ndwi)) else 0.0
+        water_threshold = max(0.0, water_mean + 0.5 * water_std)
+        maps["water_mask"] = (valid_ndwi > water_threshold).astype(np.uint8)
+        print(f"  NDWI adaptive threshold: {water_threshold:.3f}")
+
+    if ndbi is not None:
+        valid_ndbi      = np.where(np.isnan(ndbi), 0, ndbi)
+        urban_mean      = float(np.nanmean(ndbi)) if not np.all(np.isnan(ndbi)) else 0.0
+        urban_std       = float(np.nanstd(ndbi))  if not np.all(np.isnan(ndbi)) else 0.0
+        urban_threshold = max(0.15, urban_mean + 0.3 * urban_std)
+        maps["urban_mask"] = (valid_ndbi > urban_threshold).astype(np.uint8)
+        print(f"  NDBI adaptive threshold: {urban_threshold:.3f}")
+
+    return maps
+
+
+def compute_aridity_index(context: InputContext):
     if context.csv_df is None:
         return None
     df = context.csv_df
@@ -380,141 +206,141 @@ def compute_aridity_index(context: InputContext) -> float | None:
     return round(total_rain / (pet + 1e-6), 4)
 
 
-def classify_ecosystem(land_cover: dict, aridity_index=None, ndvi_mean=None) -> str:
-    water = land_cover.get("water", 0)
-    veg   = land_cover.get("vegetation", 0)
-    urban = land_cover.get("urban", 0)
-    bare  = land_cover.get("barren", 0)
+def classify_aridity(index: float) -> str:
+    if index < 0.05:   return "Hyper-arid"
+    elif index < 0.2:  return "Arid"
+    elif index < 0.5:  return "Semi-arid"
+    elif index < 0.65: return "Dry sub-humid"
+    else:              return "Humid"
+
+
+def compute_seasonality(context: InputContext) -> str:
+    if context.csv_df is None:
+        return "unknown"
+    df = context.csv_df
+    rain_cols = [c for c in df.columns if "rain" in c.lower() or "prec" in c.lower()]
+    if not rain_cols:
+        return "unknown"
+    series = df[rain_cols[0]].dropna()
+    if len(series) < 3 or series.mean() == 0:
+        return "unknown"
+    std_ratio = series.std() / series.mean()
+    if std_ratio > 1.0:   return "strongly seasonal"
+    elif std_ratio > 0.5: return "moderately seasonal"
+    else:                 return "relatively uniform"
+
+
+def classify_ecosystem(land_cover: dict, aridity_index=None,
+                        ndvi_mean=None) -> str:
+    water      = land_cover.get("water", 0)
+    vegetation = land_cover.get("vegetation", 0)
+    urban      = land_cover.get("urban", 0)
+    barren     = land_cover.get("barren", 0)
 
     if water > 50:
         return "Aquatic / Wetland"
-    if water > 15 and veg > 5:
+
+    if water > 15 and vegetation > 5:
         return "Mediterranean coastal mixed landscape"
+
     if urban > 40:
         return "Urban / Built-up area"
-    if veg > 60:
-        return "Dense forest / Tropical vegetation" if (ndvi_mean and ndvi_mean > 0.5) else "Agricultural / Grassland"
-    if veg > 20 and urban > 10:
+
+    if vegetation > 60:
+        if ndvi_mean and ndvi_mean > 0.5:
+            return "Dense forest / Tropical vegetation"
+        return "Agricultural land / Grassland"
+
+    if vegetation > 20 and urban > 10:
         return "Peri-urban mixed landscape"
+
     if aridity_index is not None:
-        if aridity_index < 0.05:  return "Hyper-arid desert"
-        if aridity_index < 0.2:   return "Arid shrubland / Desert" if veg < 15 else "Semi-arid Mediterranean scrubland"
-        if aridity_index < 0.5:   return "Semi-arid savanna / Mediterranean scrubland" if veg > 25 else "Semi-arid barren land"
-        if aridity_index < 0.65:  return "Dry sub-humid mixed land"
-        return "Humid forest / Dense vegetation" if veg > 40 else "Humid mixed landscape"
-    if bare > 60:
+        if aridity_index < 0.05:
+            return "Hyper-arid desert"
+        elif aridity_index < 0.2:
+            if vegetation > 15 or water > 10:
+                return "Semi-arid Mediterranean scrubland"
+            return "Arid shrubland / Desert"
+        elif aridity_index < 0.5:
+            if vegetation > 25:
+                return "Semi-arid savanna / Mediterranean scrubland"
+            return "Semi-arid barren land"
+        elif aridity_index < 0.65:
+            return "Dry sub-humid mixed land"
+        else:
+            return "Humid forest / Dense vegetation" if vegetation > 40 \
+                   else "Humid mixed landscape"
+
+    if barren > 60:
         return "Barren / Sparsely vegetated land"
+    if vegetation > 40:
+        return "Mixed agricultural / Natural vegetation"
     return "Mixed / Unclassified landscape"
 
-
-def compute_vegetation_breakdown(ndvi: np.ndarray, total_pixels: int) -> dict:
-    valid = ndvi[~np.isnan(ndvi)]
-    if len(valid) == 0:
-        return {"sparse_pct": 0.0, "moderate_pct": 0.0, "dense_pct": 0.0}
-    return {
-        "sparse_pct":   round(float(((valid > 0.1)  & (valid <= 0.25)).sum()) / total_pixels * 100, 2),
-        "moderate_pct": round(float(((valid > 0.25) & (valid <= 0.45)).sum()) / total_pixels * 100, 2),
-        "dense_pct":    round(float((valid > 0.45).sum())                      / total_pixels * 100, 2),
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
-
 def process_image(context: InputContext, sensor: str = None) -> InputContext:
-    print("=== Image Processor (multi-index ensemble) ===")
+    print("=== Image Processor ===")
 
     array   = context.image_array
     n_bands = context.n_bands
-    sensor  = sensor or detect_sensor(n_bands, context.image_meta)
+    sensor  = sensor or detect_sensor(n_bands)
     config  = BAND_CONFIG[sensor]
-
-    print(f"  Sensor       : {sensor}")
-    print(f"  Array shape  : {array.shape} | range [{array.min():.3f}, {array.max():.3f}]")
-    print(f"  Band config  : {config}")
+    print(f"  Array range : min={array.min():.4f}, max={array.max():.4f}, mean={array.mean():.4f}")
+    print(f"  Nodata pixels: {(array <= NODATA_THRESHOLD).sum()} / {array.size}")
+    print(f"  Sensor type : {sensor}")
+    print(f"  Band config : {config}")
 
     prescaled = is_prescaled(array)
-    print(f"  Pre-scaled   : {prescaled}")
+    print(f"  Pre-scaled  : {prescaled}")
 
-    # ── Extract and normalise all available bands ─────────────────────────────
-    bands = {}
-    for name in ["blue", "green", "red", "nir", "swir1", "swir2"]:
-        raw = get_band(array, config, name)
-        if raw is not None:
-            bands[name] = normalize_to_reflectance(raw, prescaled)
-        else:
-            bands[name] = None
+    normalized = np.stack([
+        normalize_band(array[i], prescaled=prescaled)
+        for i in range(n_bands)
+    ])
+    context.image_meta["normalized"] = True
+    context.image_meta["prescaled"]  = prescaled
 
-    available = [k for k, v in bands.items() if v is not None]
-    print(f"  Available bands: {available}")
+    # FIX: Compute indices ONCE on the raw array (accurate stats, nodata masking
+    # happens inside each compute function). The previous code computed them first
+    # on the normalized array then immediately overwrote with the raw-array result,
+    # wasting work and risking a brief window of incorrect index values.
+    context.ndvi = compute_ndvi(array, config, prescaled=prescaled)
+    context.ndwi = compute_ndwi(array, config, prescaled=prescaled)
+    context.ndbi = compute_ndbi(array, config, prescaled=prescaled)
 
-    # ── Compute all spectral indices ──────────────────────────────────────────
-    indices = {}
-    indices["ndvi"]  = compute_ndvi(bands["red"],   bands["nir"])
-    indices["ndwi"]  = compute_ndwi(bands["green"], bands["nir"])
-    indices["mndwi"] = compute_mndwi(bands["green"], bands["swir1"])
-    indices["ndbi"]  = compute_ndbi(bands["swir1"], bands["nir"])
-    indices["bsi"]   = compute_bsi(bands["blue"], bands["red"], bands["nir"], bands["swir1"])
-    indices["ui"]    = compute_ui(bands["swir2"], bands["nir"])
-    indices["evi2"]  = compute_evi2(bands["red"], bands["nir"])
-    indices["savi"]  = compute_savi(bands["red"], bands["nir"])
-
-    computed = [k for k, v in indices.items() if v is not None]
-    print(f"  Computed indices: {computed}")
-
-    for name, arr in indices.items():
-        if arr is not None:
-            valid = arr[~np.isnan(arr)]
+    for name, val in [("NDVI", context.ndvi),
+                      ("NDWI", context.ndwi),
+                      ("NDBI", context.ndbi)]:
+        if val is not None:
+            valid = val[~np.isnan(val)]
             if len(valid) > 0:
-                print(f"  {name.upper():6s}: mean={valid.mean():.3f} min={valid.min():.3f} max={valid.max():.3f}")
+                print(f"  {name}: min={valid.min():.3f}, mean={valid.mean():.3f}, "
+                      f"max={valid.max():.3f}, valid_pixels={len(valid)}")
+            else:
+                print(f"  {name}: all NaN — possible nodata issue")
+        else:
+            print(f"  {name}: skipped (missing required bands)")
 
-    # ── Store primary indices on context ──────────────────────────────────────
-    context.ndvi     = indices["ndvi"]
-    context.ndwi     = indices["ndwi"]
-    context.ndbi     = indices["ndbi"]
-    context.ndvi_map = indices["ndvi"]
-    context.ndwi_map = indices["ndwi"]
-    context.ndbi_map = indices["ndbi"]
+    total_pixels = array.shape[1] * array.shape[2]
+    height       = array.shape[1]
+    width        = array.shape[2]
 
-    if context.ndvi is not None:
-        context.ndvi_mean = float(np.nanmean(context.ndvi))
-    if context.ndwi is not None:
-        context.ndwi_mean = float(np.nanmean(context.ndwi))
-    if context.ndbi is not None:
-        context.ndbi_mean = float(np.nanmean(context.ndbi))
+    feature_maps = generate_feature_maps(array, config, prescaled=prescaled)
+    coverage = compute_cover_percentages(feature_maps, total_pixels, height=height, width=width)
 
-    # ── Ensemble classification ───────────────────────────────────────────────
-    labels, score_stack = classify_ensemble(indices)
-    land_cover = compute_cover_percentages(labels)
-    print(f"  Land cover   : {land_cover}")
+    print(f"  Coverage: {coverage}")
+    context.land_cover = coverage
 
-    context.land_cover = land_cover
-
-    # ── Derived metrics ───────────────────────────────────────────────────────
     context.aridity_index = compute_aridity_index(context)
     if context.aridity_index:
         print(f"  Aridity index: {context.aridity_index:.3f}")
 
-    ndvi_mean_val = context.ndvi_mean
+    ndvi_mean_val = float(np.nanmean(context.ndvi[~np.isnan(context.ndvi)])) \
+        if context.ndvi is not None and not np.all(np.isnan(context.ndvi)) else None
+
     context.image_meta["ecosystem"] = classify_ecosystem(
-        land_cover, context.aridity_index, ndvi_mean_val
-    )
-    context.ecosystem = context.image_meta["ecosystem"]
-    context.region    = context.image_meta.get("region_name", "Unknown region")
-    print(f"  Ecosystem    : {context.ecosystem}")
+        context.land_cover, context.aridity_index, ndvi_mean_val)
+    print(f"  Ecosystem: {context.image_meta['ecosystem']}")
 
-    # Store normalised array for ViT
-    norm_stack = []
-    for i in range(min(n_bands, array.shape[0])):
-        raw = array[i].astype(np.float32).copy()
-        raw[raw <= NODATA_THRESHOLD] = np.nan
-        norm_stack.append(normalize_to_reflectance(np.nan_to_num(raw, nan=0.0), prescaled))
-    context.image_array = np.stack(norm_stack)
-    context.image_meta["normalized"] = True
-    context.image_meta["prescaled"]  = prescaled
-    context.image_meta["sensor"]     = sensor
-    context.image_meta["indices_computed"] = computed
-
+    context.image_array = normalized
     print("=== Image processing complete ===\n")
     return context
