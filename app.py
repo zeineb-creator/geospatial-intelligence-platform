@@ -1,3 +1,6 @@
+"""
+app.py — Multimodal Geospatial Intelligence Platform
+"""
 
 import streamlit as st
 import numpy as np
@@ -633,10 +636,23 @@ with tab_report:
     if not report:
         st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">Report not generated.</div>', unsafe_allow_html=True)
     else:
-        # Strip header (everything up to and including the second ===== line)
-        report_body = re.sub(r'^=+\n[^\n]+\n=+\n+', '', report).strip()
-        # Strip footer (from the first ===== that follows the body)
-        report_body = re.sub(r'\n=+\nConfidence:.*$', '', report_body, flags=re.DOTALL).strip()
+        # Find where the actual content starts (first ## section heading)
+        # This bypasses any repeated headers the LLM may have generated
+        first_section = report.find('## 1.')
+        if first_section == -1:
+            first_section = report.find('## ')
+        if first_section != -1:
+            report_body = report[first_section:]
+        else:
+            report_body = report
+
+        # Strip footer (Confidence line and everything after)
+        footer_match = re.search(r'\n={10,}\s*\nConfidence:', report_body)
+        if footer_match:
+            report_body = report_body[:footer_match.start()].strip()
+        else:
+            # Fallback: strip trailing === blocks
+            report_body = re.sub(r'\n={10,}.*$', '', report_body, flags=re.DOTALL).strip()
         sections = parse_report_sections(report_body)
         if sections:
             for title, content in sections.items():
