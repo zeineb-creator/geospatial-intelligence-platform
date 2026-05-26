@@ -1,8 +1,5 @@
-
 import numpy as np
 import torch
-import sys
-sys.path.append("/kaggle/working")
 
 from PIL import Image
 from transformers import ViTImageProcessor, ViTModel
@@ -29,7 +26,6 @@ def load_vit(model_name: str = "google/vit-base-patch16-224"):
 def prepare_image_for_vit(image_array: np.ndarray, ndvi: np.ndarray = None) -> np.ndarray:
     rgb = image_array[:3]
     rgb = np.transpose(rgb, (1, 2, 0))
-    # Replace NaN with 0 before clipping
     rgb = np.nan_to_num(rgb, nan=0.0, posinf=1.0, neginf=0.0)
     rgb = np.clip(rgb, 0, 1)
 
@@ -50,22 +46,22 @@ def extract_features(image_uint8: np.ndarray, extractor, model) -> np.ndarray:
     cls_embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()
     return cls_embedding
 
+
 def extract_vit_features(context: InputContext, extractor=None, model=None) -> InputContext:
     """
     Extract ViT features from the image in the context and store them.
-    Returns the updated context (not just the features).
+    Returns the updated context.
     """
     if extractor is None or model is None:
         extractor, model = load_vit()
-    
+
     image_uint8 = prepare_image_for_vit(context.image_array, context.ndvi)
     cls_embedding = extract_features(image_uint8, extractor, model)
-    
-    # Store features in the context
+
     context.image_meta["cls_embedding"] = cls_embedding
-    
-    # Return the full context object
+
     return context
+
 
 def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tuple:
     scores = {cls: 0.0 for cls in LAND_COVER_CLASSES}
@@ -94,8 +90,7 @@ def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tup
     anomalies = []
     if context.ndvi is not None:
         mean_ndvi = float(context.ndvi.mean())
-    
-        # Only describe current state — never imply change without temporal data
+
         if mean_ndvi < 0.05:
             anomalies.append(
                 f"very low vegetation density observed (mean NDVI={mean_ndvi:.3f}) "
@@ -110,7 +105,7 @@ def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tup
             anomalies.append(
                 f"high vegetation density observed (mean NDVI={mean_ndvi:.3f})"
             )
-    
+
     if context.ndwi is not None:
         mean_ndwi = float(context.ndwi.mean())
         if mean_ndwi > 0.3:
@@ -122,13 +117,20 @@ def classify_land_cover(context: InputContext, cls_embedding: np.ndarray) -> tup
                 f"very low water content (mean NDWI={mean_ndwi:.3f}) "
                 f"— possible dry conditions"
             )
-    
+
     if context.ndbi is not None:
         mean_ndbi = float(context.ndbi.mean())
         if mean_ndbi > 0.2:
             anomalies.append(
                 f"high built-up density observed (mean NDBI={mean_ndbi:.3f})"
             )
+
+    # FIX: was missing the return statement — the function ended after the NDBI
+    # block without returning, so run_vision_module's unpack crashed with
+    # "cannot unpack non-iterable NoneType".
+    return scores, anomalies
+
+
 def run_vision_module(context: InputContext, extractor=None, model=None) -> tuple:
     print("=== Vision Module ===")
     if extractor is None or model is None:
