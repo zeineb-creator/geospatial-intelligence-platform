@@ -1,8 +1,5 @@
-
 import numpy as np
 import pandas as pd
-import sys
-sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
@@ -81,19 +78,16 @@ def retrieve_relevant_columns(
     retrieve only the columns that are relevant.
     Returns a filtered subset of env_summary.
     """
-    # Build the set of relevant categories from all active signals
     relevant_categories = set()
     for signal in signals:
         categories = RETRIEVAL_RULES.get(signal, RETRIEVAL_RULES["default"])
         relevant_categories.update(categories)
 
-    # Filter env_summary to only matching columns
     retrieved = {}
     for col, stats in env_summary.items():
         if stats["category"] in relevant_categories:
             retrieved[col] = stats
 
-    # If nothing matched, return everything (safe fallback)
     if not retrieved:
         retrieved = env_summary
 
@@ -110,14 +104,12 @@ def score_and_rank(retrieved: dict) -> dict:
     for col, stats in retrieved.items():
         score = 0.0
 
-        # Trend contributes to score
         if stats["trend"] == "decreasing":
             score += 1.5
         elif stats["trend"] == "increasing":
             score += 1.0
 
-        # Distance from mean contributes
-        mean = stats["mean"]
+        mean   = stats["mean"]
         latest = stats["latest"]
         if mean != 0:
             deviation = abs(latest - mean) / abs(mean)
@@ -125,12 +117,10 @@ def score_and_rank(retrieved: dict) -> dict:
 
         scored[col] = (score, stats)
 
-    # Sort by score descending
     ranked = dict(
         sorted(scored.items(), key=lambda x: x[1][0], reverse=True)
     )
 
-    # Return just the stats dicts in ranked order
     return {col: stats for col, (_, stats) in ranked.items()}
 
 
@@ -175,7 +165,7 @@ def build_rag_context(
 
     return "\n".join(lines)
 
-    
+
 def run_rag(context: InputContext) -> InputContext:
     """
     Main entry point for the RAG module.
@@ -183,11 +173,9 @@ def run_rag(context: InputContext) -> InputContext:
     """
     print("=== RAG Module ===")
 
-    # Step 1: detect what signals are active
     signals = detect_active_signals(context)
     print(f"  Active signals   : {signals}")
 
-    # Step 2: retrieve relevant CSV columns
     env_summary = {}
     if context.csv_summary and "env_summary" in context.csv_summary:
         env_summary = context.csv_summary["env_summary"]
@@ -195,11 +183,9 @@ def run_rag(context: InputContext) -> InputContext:
     retrieved = retrieve_relevant_columns(signals, env_summary)
     print(f"  Retrieved columns: {list(retrieved.keys())}")
 
-    # Step 3: rank by relevance
     ranked = score_and_rank(retrieved)
     print(f"  Ranked columns   : {list(ranked.keys())}")
 
-    # Step 4: build context string for LLM
     rag_text = build_rag_context(
         signals=signals,
         retrieved=ranked,
@@ -216,10 +202,10 @@ def run_rag(context: InputContext) -> InputContext:
 
     return context
 
+
 def retrieve_context(context: InputContext) -> InputContext:
     """
     Wrapper function that matches what app.py expects.
     Calls the existing run_rag function.
     """
     return run_rag(context)
-    
