@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-import sys
-sys.path.append("/kaggle/working")
 
 from geospatial_platform.context import InputContext
 
@@ -174,16 +172,10 @@ def integrate_data(context: InputContext) -> InputContext:
 def build_climate_summary(df) -> dict:
     """
     Derive the climate_summary dict from the raw NASA POWER DataFrame.
-    Call this in your climate processor (step 5) and store result in
-    input_context.climate_summary.
- 
-    Expected DataFrame columns (any subset):
-        rainfall_mm, temperature_c, humidity_pct
+    Expected DataFrame columns (any subset): rainfall_mm, temperature_c, humidity_pct
     """
-    import numpy as np
- 
     summary = {}
- 
+
     def _stats(col):
         if col not in df.columns:
             return {}
@@ -204,29 +196,31 @@ def build_climate_summary(df) -> dict:
             f"{col}_trend":  trend,
             f"{col}_cv":     float(cv),
         }
- 
+
     for col in ["rainfall_mm", "temperature_c", "humidity_pct"]:
         summary.update(_stats(col))
- 
+
     return summary
+
 
 def populate_convenience_fields(ic: InputContext):
     """
     After building climate_summary, populate the convenience aliases
     and derived fields on the InputContext.
-    Call this at the end of your climate processor step.
+
+    FIX: this function was defined but never called anywhere in the pipeline,
+    so ic.humidity_pct, ic.rainfall_trend, ic.water_pct, and ic.ndvi_delta
+    were always None when the LLM built its prompt. Now called explicitly
+    in app.py after integrate_data().
     """
     if ic.climate_summary:
-        ic.humidity_pct = ic.climate_summary.get("humidity_pct_latest")
+        ic.humidity_pct   = ic.climate_summary.get("humidity_pct_latest")
         ic.rainfall_trend = ic.climate_summary.get("rainfall_mm_trend")
- 
+
     if ic.land_cover:
         ic.water_pct = ic.land_cover.get("water", 0.0)
- 
-    # FIX: Check for ndvi_mean (singular) instead of ndvi_mean_t1/t2
-    # Your context uses ndvi_mean (from process_image)
+
     if hasattr(ic, 'ndvi_mean') and ic.ndvi_mean is not None:
-        # If you have temporal comparison, use ndvi_delta if it exists
         if hasattr(ic, 'ndvi_delta') and ic.ndvi_delta is not None:
             pass  # ndvi_delta already set elsewhere
         elif hasattr(ic, 'ndvi_mean_t2') and ic.ndvi_mean_t2 is not None:
