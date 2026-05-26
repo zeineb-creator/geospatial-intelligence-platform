@@ -89,9 +89,18 @@ button[kind="header"] { visibility: visible !important; }
 """, unsafe_allow_html=True)
 
 # ── Path setup ────────────────────────────────────────────────────────────────
-# NOTE: No pipeline imports here — all imports happen lazily inside the run
-# block so a broken module never crashes the sidebar on page load.
 sys.path.insert(0, os.path.dirname(__file__))
+
+
+# ── Cached model loader ───────────────────────────────────────────────────────
+# FIX: ViT was reloaded from disk on every single "Run Analysis" click, adding
+# ~10-15 seconds of unnecessary latency after the first run.
+# @st.cache_resource persists the model objects across reruns for the lifetime
+# of the Streamlit server process — the model loads once, then is reused.
+@st.cache_resource(show_spinner="Loading Vision Transformer (first run only)…")
+def get_vit_models():
+    from geospatial_platform.vision_model import load_vit
+    return load_vit()
 
 
 # ── Utility helpers ───────────────────────────────────────────────────────────
@@ -191,6 +200,21 @@ with st.sidebar:
     uploaded_t1 = st.file_uploader("Primary image (or earlier date)", type=["tif","tiff","png","jpg"], key="img_t1", help="GeoTIFF preferred.")
     uploaded_t2 = st.file_uploader("Second image — optional (later date)", type=["tif","tiff","png","jpg"], key="img_t2", help="Upload for temporal NDVI comparison.")
 
+    # FIX: Added acquisition date inputs. Previously the UI had no date fields
+    # at all, so temporal labels in the report were always extracted from
+    # filenames (fragile) or fell back to "Image 1 (earlier)" / "Image 2 (later)".
+    # These date inputs populate ic.temporal_label_t1 / t2 reliably.
+    if uploaded_t1 or uploaded_t2:
+        st.markdown("#### 📅 Acquisition Dates (optional)")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            date_t1 = st.date_input("Image 1 date", value=None, key="date_t1", help="Date the primary image was acquired.")
+        with col_d2:
+            date_t2 = st.date_input("Image 2 date", value=None, key="date_t2", help="Date the second image was acquired.")
+    else:
+        date_t1 = None
+        date_t2 = None
+
     st.markdown("### 📊 Climate Data")
     uploaded_csv = st.file_uploader("Climate data CSV — optional", type=["csv"], key="csv", help="15-year monthly climate data from NASA POWER API.")
 
@@ -249,10 +273,14 @@ if not uploaded_t1:
 status = st.status("Running geospatial analysis pipeline…", expanded=True)
 temp_files = []
 
+# FIX: collect non-fatal warnings during the pipeline so they can be shown to
+# the user at the end rather than silently swallowed by bare except blocks.
+pipeline_warnings = []
+
 try:
     with status:
 
-        # ── Lazy imports — NEVER at module level ──────────────────────────────
+        # ── Lazy imports ──────────────────────────────────────────────────────
         st.write("📦 Loading pipeline modules…")
 
         try:
@@ -280,18 +308,12 @@ try:
         except Exception as e:
             import_error_card("geospatial_platform.vision_model → extract_vit_features", e); st.stop()
 
-        build_climate_summary = None
-        populate_convenience_fields = None
         try:
             from geospatial_platform.data_integrator import (
                 integrate_data, build_climate_summary, populate_convenience_fields,
             )
-        except ImportError:
-            try:
-                from geospatial_platform.data_integrator import integrate_data
-                st.warning("⚠️ build_climate_summary / populate_convenience_fields not yet added to data_integrator.py — climate summary skipped.")
-            except Exception as e:
-                import_error_card("geospatial_platform.data_integrator → integrate_data", e); st.stop()
+        except ImportError as e:
+            import_error_card("geospatial_platform.data_integrator", e); st.stop()
 
         try:
             from geospatial_platform.rag import retrieve_context
@@ -302,6 +324,15 @@ try:
             from geospatial_platform.llm_engine import generate_report
         except Exception as e:
             import_error_card("geospatial_platform.llm_engine → generate_report", e); st.stop()
+
+        # FIX: wire in the validator module — it was fully implemented but never
+        # called anywhere, so its reliability assessment never reached the LLM.
+        try:
+            from geospatial_platform.validator import validate_inputs, build_reliability_report
+            validator_available = True
+        except Exception as e:
+            pipeline_warnings.append(f"validator module unavailable: {e}")
+            validator_available = False
 
         # ── Save uploads to temp files ────────────────────────────────────────
         st.write("📥 Saving uploaded files…")
@@ -325,9 +356,12 @@ try:
         # ── Step 1b — Second image ────────────────────────────────────────────
         if path_t2:
             st.write("📅 Loading second image for temporal comparison…")
-            array_t2, meta_t2, _, _ = load_image(path_t2)
-            ic.image_array_t2 = array_t2
-            ic.image_meta_t2  = meta_t2
+            try:
+                array_t2, meta_t2, _, _ = load_image(path_t2)
+                ic.image_array_t2 = array_t2
+                ic.image_meta_t2  = meta_t2
+            except Exception as e:
+                pipeline_warnings.append(f"Second image failed to load: {e}")
 
         # ── Step 2 — Image processing ─────────────────────────────────────────
         st.write("🔬 Computing spectral indices (NDVI · NDWI · NDBI)…")
@@ -336,76 +370,102 @@ try:
         # ── Step 2b — Temporal NDVI from second image ─────────────────────────
         if path_t2 and getattr(ic, 'image_array_t2', None) is not None:
             st.write("📅 Computing temporal NDVI delta…")
-            from geospatial_platform.image_processor import (
-                compute_ndvi, detect_sensor, BAND_CONFIG,
-                is_prescaled, get_band, normalize_to_reflectance
-            )
-            arr2    = ic.image_array_t2
-            sensor2 = detect_sensor(arr2.shape[0])
-            config2 = BAND_CONFIG[sensor2]
-            pre2    = is_prescaled(arr2)
+            try:
+                from geospatial_platform.image_processor import (
+                    compute_ndvi, detect_sensor, BAND_CONFIG, is_prescaled
+                )
+                arr2     = ic.image_array_t2
+                sensor2  = detect_sensor(arr2.shape[0])
+                config2  = BAND_CONFIG[sensor2]
+                pre2     = is_prescaled(arr2)
+                ndvi_t2  = compute_ndvi(arr2, config2, prescaled=pre2)
 
-            # New API: compute_ndvi(red, nir) — extract bands first
-            red2  = get_band(arr2, config2, "red")
-            nir2  = get_band(arr2, config2, "nir")
-            if red2 is not None and nir2 is not None:
-                red2 = normalize_to_reflectance(red2, pre2)
-                nir2 = normalize_to_reflectance(nir2, pre2)
-            ndvi_t2 = compute_ndvi(red2, nir2)
+                if ndvi_t2 is not None and not np.all(np.isnan(ndvi_t2)):
+                    mean_t1 = float(np.nanmean(ic.ndvi)) if ic.ndvi is not None else None
+                    mean_t2 = float(np.nanmean(ndvi_t2))
+                    ic.ndvi_mean_t1 = mean_t1
+                    ic.ndvi_mean_t2 = mean_t2
+                    ic.ndvi_delta   = round(mean_t2 - mean_t1, 4) if mean_t1 is not None else None
 
-            if ndvi_t2 is not None and not np.all(np.isnan(ndvi_t2)):
-                mean_t1 = float(np.nanmean(ic.ndvi)) if ic.ndvi is not None else None
-                mean_t2 = float(np.nanmean(ndvi_t2))
-                ic.ndvi_mean_t1   = mean_t1
-                ic.ndvi_mean_t2   = mean_t2
-                ic.ndvi_delta     = round(mean_t2 - mean_t1, 4) if mean_t1 is not None else None
+                    # FIX: prefer explicit date inputs over regex filename extraction.
+                    # date_t1 / date_t2 come from the sidebar st.date_input widgets.
+                    # Fall back to filename year extraction if dates not provided.
+                    import re as _re
+                    def _year_from_name(fname):
+                        m = _re.search(r'(19|20)\d{2}', fname or '')
+                        return m.group(0) if m else None
 
-                # Extract year labels from filenames (e.g. "2010_nabeul.tif" → "2010")
-                import re as _re
-                def _year_from_name(fname):
-                    m = _re.search(r'(19|20)\d{2}', fname or '')
-                    return m.group(0) if m else None
-
-                ic.temporal_label_t1 = _year_from_name(uploaded_t1.name) or "Image 1 (earlier)"
-                ic.temporal_label_t2 = _year_from_name(uploaded_t2.name) or "Image 2 (later)"
-
-                # Flag vegetation change anomaly
-                if ic.ndvi_delta is not None and abs(ic.ndvi_delta) > 0.05:
-                    direction = "improvement" if ic.ndvi_delta > 0 else "decline"
-                    ic.anomalies = list(ic.anomalies or [])
-                    ic.anomalies.append(
-                        f"vegetation {direction} detected (ΔNDVI={ic.ndvi_delta:+.3f})"
+                    ic.temporal_label_t1 = (
+                        str(date_t1.year) if date_t1 else
+                        _year_from_name(uploaded_t1.name) or "Image 1 (earlier)"
+                    )
+                    ic.temporal_label_t2 = (
+                        str(date_t2.year) if date_t2 else
+                        _year_from_name(uploaded_t2.name) or "Image 2 (later)"
                     )
 
+                    if ic.ndvi_delta is not None and abs(ic.ndvi_delta) > 0.05:
+                        direction = "improvement" if ic.ndvi_delta > 0 else "decline"
+                        ic.anomalies = list(ic.anomalies or [])
+                        ic.anomalies.append(
+                            f"vegetation {direction} detected (ΔNDVI={ic.ndvi_delta:+.3f})"
+                        )
+            except Exception as e:
+                pipeline_warnings.append(f"Temporal NDVI computation failed: {e}")
+
         # ── Step 3 — ViT feature extraction ──────────────────────────────────
+        # FIX: use cached model instead of reloading on every run.
         st.write("🧠 Extracting Vision Transformer features…")
-        ic = extract_vit_features(ic)
+        try:
+            extractor, vit_model = get_vit_models()
+            ic = extract_vit_features(ic, extractor=extractor, model=vit_model)
+        except Exception as e:
+            pipeline_warnings.append(f"ViT feature extraction failed: {e}")
+
+        # ── Step 3b — Validator ───────────────────────────────────────────────
+        # FIX: validate_inputs() was implemented but never called. Now we call it
+        # here (after image processing so all index flags are set) and store the
+        # reliability report on ic so it can be injected into the LLM prompt and
+        # shown in the UI.
+        reliability_report_text = ""
+        if validator_available:
+            try:
+                flags = validate_inputs(ic)
+                reliability_report_text = build_reliability_report(flags)
+                ic.image_meta["reliability_report"] = reliability_report_text
+            except Exception as e:
+                pipeline_warnings.append(f"Validator failed: {e}")
 
         # ── Step 4 — Climate data integration ─────────────────────────────────
         if path_csv:
             st.write("📊 Integrating NASA POWER climate data…")
-            ic = integrate_data(ic)
-            if build_climate_summary and populate_convenience_fields:
+            try:
+                ic = integrate_data(ic)
                 df = getattr(ic, 'csv_df', None)
-                if df is None:
-                    df = getattr(ic, 'climate_df', None)
                 if df is not None:
                     ic.climate_summary = build_climate_summary(df)
+                    # FIX: populate_convenience_fields() was never called, so
+                    # ic.humidity_pct, ic.rainfall_trend, ic.water_pct, and
+                    # ic.ndvi_delta were always None in the LLM prompt.
                     populate_convenience_fields(ic)
                 else:
-                    st.warning("⚠️ Climate DataFrame not found on InputContext after integration.")
+                    pipeline_warnings.append("Climate DataFrame not found after integration — climate convenience fields skipped.")
+            except Exception as e:
+                pipeline_warnings.append(f"Climate data integration failed: {e}")
         else:
             st.write("📊 No climate CSV — skipping.")
 
         # ── Step 5 — RAG ──────────────────────────────────────────────────────
         st.write("📚 Retrieving environmental context (RAG)…")
-        ic = retrieve_context(ic)
-        # Normalise RAG field name — support both ic.rag_context and ic.retrieved_context
-        if not getattr(ic, 'rag_context', None):
-            ic.rag_context = getattr(ic, 'retrieved_context', '') or ''
+        try:
+            ic = retrieve_context(ic)
+            if not getattr(ic, 'rag_context', None):
+                ic.rag_context = getattr(ic, 'retrieved_context', '') or ''
+        except Exception as e:
+            pipeline_warnings.append(f"RAG failed: {e}")
+            ic.rag_context = ""
 
         # ── Patch derived fields before report generation ─────────────────────
-        # Ensure mean index values exist (image_processor may store as ic.ndvi, not ic.ndvi_mean)
         for attr in ('ndvi', 'ndwi', 'ndbi'):
             arr = getattr(ic, attr, None)
             mean_attr = f"{attr}_mean"
@@ -414,7 +474,6 @@ try:
                 setattr(ic, mean_attr, float(np.nanmean(arr)))
                 setattr(ic, map_attr,  arr)
 
-        # Ensure region / ecosystem set from image_meta if not already
         if not getattr(ic, 'region', None):
             ic.region = ic.image_meta.get("region_name", "Unknown region")
         if not getattr(ic, 'ecosystem', None):
@@ -423,17 +482,24 @@ try:
         # ── Confidence score ──────────────────────────────────────────────────
         if ic.confidence_score is None:
             score = 0.0
-            if ic.ndvi is not None:           score += 20
-            if ic.ndwi is not None:           score += 15
-            if ic.ndbi is not None:           score += 10
-            if ic.aridity_index is not None:  score += 10
+            if ic.ndvi is not None:                      score += 20
+            if ic.ndwi is not None:                      score += 15
+            if ic.ndbi is not None:                      score += 10
+            if ic.aridity_index is not None:             score += 10
             if getattr(ic, 'csv_df', None) is not None: score += 20
-            if ic.ndvi_delta is not None:     score += 15
+            if ic.ndvi_delta is not None:                score += 15
             ic.confidence_score = min(85.0, score)
 
         # ── Step 6 — Report generation ────────────────────────────────────────
+        # FIX: previously used ic.final_report (set inside generate_report) but
+        # the UI read ic.report, so the report tab always showed "not generated".
+        # Now we store the return value directly into ic.report.
         st.write("✍️ Generating scientific report…")
-        ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
+        try:
+            ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
+        except Exception as e:
+            pipeline_warnings.append(f"Report generation failed: {e}")
+            ic.report = f"[Report generation failed: {e}]"
 
     status.update(label="✅ Analysis complete", state="complete", expanded=False)
 
@@ -452,6 +518,19 @@ finally:
     for p in temp_files:
         try: os.unlink(p)
         except: pass
+
+
+# ── Show pipeline warnings if any ────────────────────────────────────────────
+# FIX: non-fatal errors were previously swallowed silently. Now they surface
+# as a collapsible warning block below the pipeline status bar.
+if pipeline_warnings:
+    with st.expander(f"⚠️ {len(pipeline_warnings)} pipeline warning(s) — click to expand", expanded=False):
+        for w in pipeline_warnings:
+            st.markdown(f"""
+            <div class="geo-card geo-card-warn" style="margin-bottom:0.4rem;padding:0.6rem 1rem;">
+                <code style="font-size:0.78rem;">{w}</code>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -504,14 +583,14 @@ with tab_overview:
         if ndbi  is not None: chips += f'<div class="metric-chip">NDBI<span>{ndbi:.3f}</span></div>'
         if ai    is not None: chips += f'<div class="metric-chip">Aridity<span>{ai:.3f}</span></div>'
         if delta is not None:
-            sign  = "+" if delta >= 0 else ""
+            sign   = "+" if delta >= 0 else ""
             dcolor = "#16a34a" if delta >= 0 else "#dc2626"
             chips += f'<div class="metric-chip">ΔNDVI<span style="color:{dcolor}">{sign}{delta:.3f}</span></div>'
         st.markdown(f'<div class="metric-row">{chips}</div>', unsafe_allow_html=True)
 
         land_cover = getattr(ic, 'land_cover', None)
         if land_cover:
-            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:1.05rem;font-weight:600;color:#2563eb;border-bottom:1px solid #dde3ed;padding-bottom:0.4rem;margin:1rem 0 0.6rem 0;">Land Cover</div>', unsafe_allow_html=True)
+            st.markdown("## Land Cover")
             st.markdown(render_land_cover_bar(land_cover), unsafe_allow_html=True)
             lc_cols = st.columns(4)
             lc_colors = {"water":"#3b82f6","vegetation":"#22c55e","urban":"#f59e0b","barren":"#94a3b8"}
@@ -531,6 +610,12 @@ with tab_overview:
             st.markdown("## Detected Anomalies")
             tags = "".join(f'<span class="anomaly-tag">⚠ {a}</span>' for a in anomalies)
             st.markdown(f"<div>{tags}</div>", unsafe_allow_html=True)
+
+        # Show reliability report if available
+        reliability = ic.image_meta.get("reliability_report", "")
+        if reliability:
+            with st.expander("📋 Data Reliability Assessment", expanded=False):
+                st.code(reliability, language=None)
 
     with col2:
         st.markdown("## Confidence Score")
@@ -568,10 +653,10 @@ with tab_overview:
             st.markdown("## Climate Snapshot")
             cs = climate_summary
             pairs = [
-                ("Rainfall (latest)", f"{cs.get('rainfall_mm_latest',0):.1f} mm"),
-                ("Rainfall trend",    cs.get('rainfall_mm_trend','—').capitalize()),
-                ("Temperature",       f"{cs.get('temperature_c_latest',0):.1f} °C"),
-                ("Humidity",          f"{cs.get('humidity_pct_latest',0):.1f} %"),
+                ("Rainfall (latest)", f"{cs.get('rainfall_mm_latest', 0):.1f} mm"),
+                ("Rainfall trend",    cs.get('rainfall_mm_trend', '—').capitalize()),
+                ("Temperature",       f"{cs.get('temperature_c_latest', 0):.1f} °C"),
+                ("Humidity",          f"{cs.get('humidity_pct_latest', 0):.1f} %"),
             ]
             rows = "".join(f"""
             <div class="meta-row">
@@ -644,8 +729,6 @@ with tab_report:
     if not report:
         st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">Report not generated.</div>', unsafe_allow_html=True)
     else:
-        # Find where the actual content starts (first ## section heading)
-        # This bypasses any repeated headers the LLM may have generated
         first_section = report.find('## 1.')
         if first_section == -1:
             first_section = report.find('## ')
@@ -654,12 +737,10 @@ with tab_report:
         else:
             report_body = report
 
-        # Strip footer (Confidence line and everything after)
         footer_match = re.search(r'\n={10,}\s*\nConfidence:', report_body)
         if footer_match:
             report_body = report_body[:footer_match.start()].strip()
         else:
-            # Fallback: strip trailing === blocks
             report_body = re.sub(r'\n={10,}.*$', '', report_body, flags=re.DOTALL).strip()
         sections = parse_report_sections(report_body)
         if sections:
@@ -671,9 +752,10 @@ with tab_report:
         st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
         col_dl, _ = st.columns([1, 3])
         with col_dl:
+            region_str_safe = region_str.replace(' ', '_').replace(',', '')
             st.download_button(
                 label="⬇ Download Report (.txt)",
                 data=report,
-                file_name=f"geointel_{region_str.replace(' ','_').replace(',','')}.txt",
+                file_name=f"geointel_{region_str_safe}.txt",
                 mime="text/plain",
             )
