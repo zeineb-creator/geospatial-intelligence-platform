@@ -28,7 +28,10 @@ section[data-testid="stSidebar"] {
     background-color: #ffffff;
     border-right: 1px solid #dde3ed;
 }
-section[data-testid="stSidebar"] * { color: #1a1f2e !important; }
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] div.stMarkdown { color: #1a1f2e !important; }
 
 h1, h2, h3 { font-family: 'IBM Plex Mono', monospace !important; letter-spacing: -0.02em; }
 h1 { font-size: 1.6rem !important; color: #1a1f2e !important; }
@@ -74,10 +77,14 @@ h3 { font-size: 0.95rem !important; color: #3b82f6 !important; }
 
 .meta-row { display: flex; justify-content: space-between; padding: 0.35rem 0; border-bottom: 1px solid #f0f4ff; font-size: 0.82rem; }
 
-/* Hide only Streamlit branding — NOT the header (keeps sidebar toggle visible) */
+/* Hide only Streamlit branding */
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-[data-testid="stToolbar"] { visibility: hidden; }
+
+/* Keep sidebar collapse/expand buttons always visible */
+[data-testid="collapsedControl"] { visibility: visible !important; display: flex !important; }
+button[kind="header"] { visibility: visible !important; }
+[data-testid="stSidebarCollapseButton"] { visibility: visible !important; }
 </style>
 """, unsafe_allow_html=True)
 
