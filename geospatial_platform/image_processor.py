@@ -398,9 +398,9 @@ def classify_ensemble(indices: dict) -> np.ndarray:
 
     # Compute soft membership for each class
     w_water = water_score(ndwi, mndwi, ndvi)
-    w_veg   = vegetation_score(ndvi, evi2, savi, mndwi)
+    w_veg   = vegetation_score(ndvi, evi2, savi, mndwi, bsi)
     w_urban = urban_score(ndbi, bsi, ui, mndwi, ndvi)
-    w_bare  = barren_score(ndvi, bsi, mndwi)
+    w_bare  = barren_score(ndvi, bsi, mndwi, ndbi)
 
     # Stack scores and take argmax
     scores = np.stack([w_water, w_veg, w_urban, w_bare], axis=0)
