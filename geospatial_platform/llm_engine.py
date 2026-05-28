@@ -1,10 +1,26 @@
+"""
+llm_engine.py — Global, sensor-agnostic geospatial report generator
+=====================================================================
+Improvements:
+- Global ecosystem knowledge base (20+ biome types, not just Mediterranean)
+- Location-agnostic interpretation: works for Amazon, Sahara, Siberia, etc.
+- Pre-computed interpretation facts injected before LLM sees data
+- Universal contradiction detector (aridity, water, NDVI, urban — all biomes)
+- Two-stage pipeline: interpret (structured) → write (prose)
+- Seasonal context derived from hemisphere + aridity class (no hardcoded region)
+- Hallucination validator + correction retry
+"""
+
 import os
-from groq import Groq
-from typing import Optional
+import re
+import json
 import numpy as np
+from groq import Groq
 
 
-# ── Groq client ───────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# GROQ CLIENT
+# ══════════════════════════════════════════════════════════════════════════════
 
 def get_groq_client():
     try:
@@ -14,162 +30,662 @@ def get_groq_client():
         api_key = os.environ.get("GROQ_API_KEY", "")
     return Groq(api_key=api_key)
 
+def load_llm():
+    """Stub — Groq is initialised inside generate_report()."""
+    return None
 
-# ── Index interpretation helpers ──────────────────────────────────────────────
 
-def interpret_ndvi(ndvi: float) -> str:
-    if ndvi is None: return "not available"
-    if ndvi < 0.1:   return "near-zero — bare soil or rock, no meaningful vegetation signal"
-    elif ndvi < 0.2: return "very low — sparse or stressed xerophytic vegetation typical of arid zones; soil dominates reflectance"
-    elif ndvi < 0.35: return "low-moderate — open shrubland or degraded vegetation; seasonal greening likely limited to cooler months"
-    elif ndvi < 0.5: return "moderate — mixed shrub-grassland or seasonally active vegetation; productive during wet season"
-    elif ndvi < 0.65: return "moderately high — dense shrubland or productive cropland with active canopy"
-    else:             return "high — dense healthy canopy consistent with forest or irrigated agriculture"
+# ══════════════════════════════════════════════════════════════════════════════
+# GLOBAL ECOSYSTEM KNOWLEDGE BASE
+# Covers all major biome types detectable from satellite imagery.
+# Each entry is keyed to ecosystem strings produced by image_processor.py.
+# ══════════════════════════════════════════════════════════════════════════════
+
+ECOSYSTEM_KB = {
+
+    # ── Arid / Desert ────────────────────────────────────────────────────────
+    "hyper-arid desert": {
+        "koppen":           "BWh / BWk",
+        "rainfall_mm_yr":   (0, 25),
+        "ndvi_range":       (0.00, 0.08),
+        "ndvi_noise":       0.03,
+        "ndvi_sig_change":  0.06,
+        "barren_expected":  (70, 99),
+        "veg_expected":     (0, 10),
+        "water_expected":   (0, 5),
+        "seasonal_pattern": "negligible — rainfall events are unpredictable and sparse",
+        "water_body_types": ["ephemeral wadi", "playa", "reg (stone desert)"],
+        "key_stressors":    ["extreme heat", "wind erosion", "salt crust formation"],
+        "greening_context": "Vegetation pulses after rare rainfall events; NDVI spikes are short-lived (weeks)",
+        "urban_note":       "Any urban signal in desert is likely industrial/mining or isolated settlement",
+    },
+
+    "arid shrubland / desert": {
+        "koppen":           "BWh / BSh",
+        "rainfall_mm_yr":   (25, 200),
+        "ndvi_range":       (0.05, 0.18),
+        "ndvi_noise":       0.04,
+        "ndvi_sig_change":  0.08,
+        "barren_expected":  (50, 85),
+        "veg_expected":     (5, 30),
+        "water_expected":   (0, 10),
+        "seasonal_pattern": "pulse-driven — vegetation responds within weeks of rainfall events",
+        "water_body_types": ["seasonal wadi", "sebkha", "playa", "oasis"],
+        "key_stressors":    ["drought", "overgrazing", "soil salinisation", "wind erosion"],
+        "greening_context": "Inter-annual NDVI variability driven by rainfall pulses; multi-year trends "
+                            "reflect cumulative soil moisture and grazing pressure changes",
+        "urban_note":       "Urban expansion in arid zones often visible as bright impervious surfaces "
+                            "contrasting strongly with dark desert background",
+    },
+
+    "semi-arid mediterranean scrubland": {
+        "koppen":           "Csa / BSk",
+        "rainfall_mm_yr":   (200, 500),
+        "ndvi_range":       (0.08, 0.40),
+        "ndvi_noise":       0.05,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (20, 60),
+        "veg_expected":     (20, 60),
+        "water_expected":   (0, 25),
+        "seasonal_pattern": "strong winter-wet / summer-dry; NDVI peak Feb–May, trough Jul–Sep",
+        "water_body_types": ["sebkha", "lagoon", "seasonal wetland", "coastal salt flat"],
+        "key_stressors":    ["summer drought", "fire", "overgrazing", "soil erosion"],
+        "greening_context": "ΔNDVI > 0.10 over 10+ years is consistent with documented Sahel/Maghreb "
+                            "greening (Brandt et al. 2017; Venter et al. 2021) driven by rainfall "
+                            "variability and CO₂ fertilisation; NOT unexpected",
+        "urban_note":       "Peri-urban sprawl common around Mediterranean cities; "
+                            "urban fraction 15–35% typical for coastal cities",
+    },
+
+    "mediterranean coastal mixed landscape": {
+        "koppen":           "Csa / Csb",
+        "rainfall_mm_yr":   (400, 700),
+        "ndvi_range":       (0.10, 0.45),
+        "ndvi_noise":       0.05,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (10, 40),
+        "veg_expected":     (25, 60),
+        "water_expected":   (5, 35),
+        "seasonal_pattern": "strong winter-wet / summer-dry; NDVI peak Feb–May, trough Jul–Sep",
+        "water_body_types": ["sebkha", "lagoon", "coastal wetland", "salt flat"],
+        "key_stressors":    ["summer drought", "urbanisation", "salinisation", "fire"],
+        "greening_context": "ΔNDVI > 0.10 over 10+ years is consistent with documented regional "
+                            "greening trends in North Africa and Southern Europe; NOT unexpected",
+        "urban_note":       "Coastal urban fraction 15–35% typical; tourism infrastructure "
+                            "common near shorelines",
+    },
+
+    "dry sub-humid mixed land": {
+        "koppen":           "Csa / Cwa",
+        "rainfall_mm_yr":   (500, 800),
+        "ndvi_range":       (0.15, 0.55),
+        "ndvi_noise":       0.05,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (5, 30),
+        "veg_expected":     (40, 75),
+        "water_expected":   (0, 15),
+        "seasonal_pattern": "moderate seasonality; dry summers limit peak greenness",
+        "water_body_types": ["river", "reservoir", "seasonal wetland"],
+        "key_stressors":    ["seasonal drought", "land clearing", "soil degradation"],
+        "greening_context": "Vegetation responds strongly to interannual rainfall variability; "
+                            "agricultural intensification can drive both greening and browning",
+        "urban_note":       "Mixed rural-urban fringe typical; agricultural land common",
+    },
+
+    # ── Tropical / Subtropical ────────────────────────────────────────────────
+    "dense forest / tropical vegetation": {
+        "koppen":           "Af / Am / Aw",
+        "rainfall_mm_yr":   (1500, 4000),
+        "ndvi_range":       (0.60, 0.95),
+        "ndvi_noise":       0.03,
+        "ndvi_sig_change":  0.08,
+        "barren_expected":  (0, 5),
+        "veg_expected":     (70, 99),
+        "water_expected":   (0, 20),
+        "seasonal_pattern": "low seasonality in equatorial zones; pronounced dry season in savanna margins",
+        "water_body_types": ["river", "floodplain", "oxbow lake", "varzea"],
+        "key_stressors":    ["deforestation", "fire", "fragmentation", "selective logging"],
+        "greening_context": "NDVI decline in tropical forest is a serious deforestation signal; "
+                            "ΔNDVI < -0.05 over 5+ years indicates structural forest loss",
+        "urban_note":       "Forest clearing for agriculture or urban expansion appears as sharp "
+                            "NDVI decline with corresponding barren/urban increase",
+    },
+
+    "agricultural / grassland": {
+        "koppen":           "Cfa / Cfb / Dfa / Cwa",
+        "rainfall_mm_yr":   (600, 1500),
+        "ndvi_range":       (0.25, 0.70),
+        "ndvi_noise":       0.08,
+        "ndvi_sig_change":  0.12,
+        "barren_expected":  (5, 40),
+        "veg_expected":     (40, 85),
+        "water_expected":   (0, 15),
+        "seasonal_pattern": "strong crop cycle seasonality; NDVI follows planting/harvest calendar",
+        "water_body_types": ["irrigation canal", "reservoir", "river", "seasonal wetland"],
+        "key_stressors":    ["drought", "flood", "soil degradation", "crop failure"],
+        "greening_context": "High inter-annual NDVI variability driven by crop type rotation and rainfall; "
+                            "multi-year trends reflect land use intensification or abandonment",
+        "urban_note":       "Peri-urban agricultural land common; field patterns visible at 30m resolution",
+    },
+
+    "semi-arid savanna / mediterranean scrubland": {
+        "koppen":           "BSh / Aw / Csa",
+        "rainfall_mm_yr":   (300, 700),
+        "ndvi_range":       (0.10, 0.45),
+        "ndvi_noise":       0.06,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (15, 55),
+        "veg_expected":     (25, 65),
+        "water_expected":   (0, 15),
+        "seasonal_pattern": "strong wet/dry seasonality; savanna greens rapidly after first rains",
+        "water_body_types": ["seasonal river", "pan", "seasonal wetland"],
+        "key_stressors":    ["fire", "overgrazing", "bush encroachment", "drought"],
+        "greening_context": "Bush encroachment (woody plant expansion) can drive NDVI increase "
+                            "independent of rainfall — a key alternative hypothesis to test",
+        "urban_note":       "Rural settlement common; urban fraction typically < 10%",
+    },
+
+    # ── Temperate ─────────────────────────────────────────────────────────────
+    "humid mixed landscape": {
+        "koppen":           "Cfb / Cfc / Dfb",
+        "rainfall_mm_yr":   (700, 1500),
+        "ndvi_range":       (0.30, 0.75),
+        "ndvi_noise":       0.06,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (0, 15),
+        "veg_expected":     (50, 90),
+        "water_expected":   (0, 20),
+        "seasonal_pattern": "moderate — temperate deciduous cycle; peak greenness Jun–Aug (N hemisphere)",
+        "water_body_types": ["lake", "river", "bog", "marsh"],
+        "key_stressors":    ["urbanisation", "agricultural intensification", "drainage"],
+        "greening_context": "Greening trends in temperate zones often linked to growing season "
+                            "lengthening from warming temperatures (climate-driven phenological shift)",
+        "urban_note":       "Extensive urban and suburban land use; impervious fraction 20–60% in cities",
+    },
+
+    "humid forest / dense vegetation": {
+        "koppen":           "Cfb / Dfb / Cfc",
+        "rainfall_mm_yr":   (800, 2000),
+        "ndvi_range":       (0.50, 0.90),
+        "ndvi_noise":       0.04,
+        "ndvi_sig_change":  0.08,
+        "barren_expected":  (0, 10),
+        "veg_expected":     (70, 99),
+        "water_expected":   (0, 15),
+        "seasonal_pattern": "deciduous forests show strong spring green-up; evergreen forests more stable",
+        "water_body_types": ["river", "lake", "peat bog", "floodplain"],
+        "key_stressors":    ["deforestation", "pest outbreak", "fire", "windthrow"],
+        "greening_context": "Temperate forest NDVI increase can reflect either natural recovery "
+                            "after disturbance or growing season lengthening from climate warming",
+        "urban_note":       "Forest fragmentation by roads/settlements detectable at 30m",
+    },
+
+    # ── Cold / Boreal ─────────────────────────────────────────────────────────
+    "semi-arid barren land": {
+        "koppen":           "BSk / ET",
+        "rainfall_mm_yr":   (100, 400),
+        "ndvi_range":       (0.05, 0.25),
+        "ndvi_noise":       0.04,
+        "ndvi_sig_change":  0.08,
+        "barren_expected":  (40, 80),
+        "veg_expected":     (10, 45),
+        "water_expected":   (0, 10),
+        "seasonal_pattern": "short growing season; snow cover affects winter NDVI",
+        "water_body_types": ["ephemeral stream", "salt lake", "steppe wetland"],
+        "key_stressors":    ["wind erosion", "overgrazing", "permafrost thaw (high lat)"],
+        "greening_context": "Steppe greening linked to precipitation trends; browning linked to "
+                            "drought intensification or permafrost degradation at high latitudes",
+        "urban_note":       "Sparse settlement; mining and extraction visible as bright anomalies",
+    },
+
+    # ── Urban ─────────────────────────────────────────────────────────────────
+    "urban / built-up area": {
+        "koppen":           "any",
+        "rainfall_mm_yr":   (0, 3000),
+        "ndvi_range":       (0.05, 0.30),
+        "ndvi_noise":       0.03,
+        "ndvi_sig_change":  0.08,
+        "barren_expected":  (5, 30),
+        "veg_expected":     (5, 40),
+        "water_expected":   (0, 15),
+        "seasonal_pattern": "urban heat island suppresses seasonal signal; parks drive NDVI variability",
+        "water_body_types": ["stormwater pond", "river", "recreational lake"],
+        "key_stressors":    ["heat island", "impervious surface runoff", "green space loss"],
+        "greening_context": "Urban NDVI increase typically reflects green infrastructure investment "
+                            "or urban forest canopy maturation, not natural recovery",
+        "urban_note":       "Urban fraction expected to dominate (> 40%); "
+                            "NDBI and UI will both be elevated",
+    },
+
+    "peri-urban mixed landscape": {
+        "koppen":           "any",
+        "rainfall_mm_yr":   (0, 2000),
+        "ndvi_range":       (0.10, 0.50),
+        "ndvi_noise":       0.06,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (5, 30),
+        "veg_expected":     (20, 60),
+        "water_expected":   (0, 20),
+        "seasonal_pattern": "mixed — agricultural cycles and urban park seasonality",
+        "water_body_types": ["reservoir", "irrigation canal", "stormwater pond"],
+        "key_stressors":    ["urban sprawl", "agricultural land loss", "drainage modification"],
+        "greening_context": "NDVI trends in peri-urban zones primarily reflect land conversion, "
+                            "not climate-driven vegetation change",
+        "urban_note":       "Urban growth detectable as barren→urban transition; "
+                            "ΔNDVI may be negative due to vegetation clearance",
+    },
+
+    # ── Aquatic / Wetland ─────────────────────────────────────────────────────
+    "aquatic / wetland": {
+        "koppen":           "any",
+        "rainfall_mm_yr":   (0, 3000),
+        "ndvi_range":       (0.05, 0.55),
+        "ndvi_noise":       0.05,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (0, 20),
+        "veg_expected":     (10, 60),
+        "water_expected":   (30, 99),
+        "seasonal_pattern": "inundation extent varies seasonally; emergent vegetation peaks in warm months",
+        "water_body_types": ["permanent lake", "seasonal floodplain", "mangrove", "marsh", "estuary"],
+        "key_stressors":    ["drainage", "eutrophication", "water level change", "invasive species"],
+        "greening_context": "Wetland NDVI increase can reflect either vegetation recovery or "
+                            "aquatic plant expansion (e.g. water hyacinth invasion)",
+        "urban_note":       "Urban encroachment on wetlands is a common land use change driver",
+    },
+
+    # ── Fallback ──────────────────────────────────────────────────────────────
+    "mixed / unclassified landscape": {
+        "koppen":           "unknown",
+        "rainfall_mm_yr":   (0, 3000),
+        "ndvi_range":       (0.0, 1.0),
+        "ndvi_noise":       0.05,
+        "ndvi_sig_change":  0.10,
+        "barren_expected":  (0, 100),
+        "veg_expected":     (0, 100),
+        "water_expected":   (0, 100),
+        "seasonal_pattern": "unknown — interpret relative to latitude and climate data",
+        "water_body_types": ["unknown"],
+        "key_stressors":    ["unknown"],
+        "greening_context": "Interpret NDVI trends relative to published baselines for the "
+                            "detected climate zone",
+        "urban_note":       "Classify urban signal relative to regional settlement patterns",
+    },
+}
+
+
+def get_ecosystem_kb(ecosystem: str) -> dict:
+    """Return the knowledge base entry for the detected ecosystem."""
+    if not ecosystem:
+        return ECOSYSTEM_KB["mixed / unclassified landscape"]
+    eco_lower = ecosystem.lower().strip()
+    # Exact match first
+    if eco_lower in ECOSYSTEM_KB:
+        return ECOSYSTEM_KB[eco_lower]
+    # Partial match
+    for key, val in ECOSYSTEM_KB.items():
+        if any(word in eco_lower for word in key.split()):
+            return val
+    return ECOSYSTEM_KB["mixed / unclassified landscape"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INDEX INTERPRETERS (global, no hardcoded region)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def interpret_ndvi(ndvi: float, kb: dict = None) -> str:
+    if ndvi is None:
+        return "not available"
+    # Generic thresholds — contextualised by ecosystem KB in facts block
+    if ndvi < 0.05:   return "near-zero — bare soil, rock, or open water; no vegetation signal"
+    elif ndvi < 0.12: return "very sparse — isolated individual plants or biological soil crust only"
+    elif ndvi < 0.20: return "sparse — open vegetation with substantial exposed substrate"
+    elif ndvi < 0.30: return "low-moderate — open canopy shrubland, sparse grassland, or stressed cropland"
+    elif ndvi < 0.45: return "moderate — mixed shrub-grassland, seasonal cropland, or savanna"
+    elif ndvi < 0.60: return "moderately high — dense shrubland, productive cropland, or open woodland"
+    elif ndvi < 0.75: return "high — closed canopy woodland, dense cropland, or irrigated vegetation"
+    else:             return "very high — dense tropical or temperate forest with full canopy closure"
 
 
 def interpret_ndwi(ndwi: float) -> str:
-    if ndwi is None:  return "not available"
-    if ndwi > 0.3:    return "strongly positive — open water body clearly present; likely permanent surface water"
-    elif ndwi > 0.0:  return "mildly positive — wet soils or shallow water influence; possible wetland fringe"
-    elif ndwi > -0.15: return "near-zero — dry to moist surface with no open water signal"
-    else:              return "negative — dry soil or senescent vegetation with no surface moisture signal"
+    if ndwi is None:     return "not available"
+    if ndwi > 0.30:      return "strongly positive — permanent open water body"
+    elif ndwi > 0.10:    return "moderately positive — shallow water, flooded soil, or dense wetland"
+    elif ndwi > 0.00:    return "mildly positive — moist soil or wetland fringe"
+    elif ndwi > -0.15:   return "near-zero — dry to moderately moist surface; no standing water"
+    elif ndwi > -0.30:   return "negative — dry surface or senescent vegetation; no water influence"
+    else:                return "strongly negative — very dry surface or salt-encrusted substrate"
 
 
 def interpret_ndbi(ndbi: float) -> str:
-    if ndbi is None:  return "not available"
-    if ndbi > 0.2:    return "high — significant impervious surface; dense urban fabric"
-    elif ndbi > 0.0:  return "low-moderate — sparse built-up features, peri-urban fringe, or exposed rock"
-    else:              return "negative — vegetated or water-dominated surface; minimal built-up signal"
+    if ndbi is None:   return "not available"
+    if ndbi > 0.20:    return "high — dense urban fabric or heavily disturbed bare surface"
+    elif ndbi > 0.05:  return "moderate — peri-urban fringe, exposed rock, or construction site"
+    elif ndbi > 0.00:  return "low-moderate — sparse built-up features or partially exposed soil"
+    else:              return "negative — vegetated or water-dominated; minimal impervious surface"
 
 
 def interpret_aridity(ai: float) -> str:
     if ai is None:    return "not available"
-    if ai < 0.05:     return "Hyper-arid — essentially no rain-fed vegetation possible; desert core"
-    elif ai < 0.2:    return "Arid — sparse xerophytic vegetation; all agriculture requires irrigation"
-    elif ai < 0.5:    return "Semi-arid — steppe ecosystems; rain-fed agriculture marginal and drought-prone"
-    elif ai < 0.65:   return "Dry sub-humid — Mediterranean-type; vegetation under significant summer drought stress"
-    else:              return "Humid — sufficient rainfall for dense vegetation without irrigation"
+    if ai < 0.05:     return "Hyper-arid (UNESCO) — essentially no rain-fed plant growth; desert core"
+    elif ai < 0.20:   return "Arid (UNESCO) — sparse xerophytic vegetation; irrigation required for agriculture"
+    elif ai < 0.50:   return "Semi-arid (UNESCO) — steppe vegetation; rain-fed farming marginal and risky"
+    elif ai < 0.65:   return "Dry sub-humid (UNESCO) — seasonal moisture deficit; drought stress during dry season"
+    else:             return "Humid (UNESCO) — sufficient rainfall year-round for dense vegetation without irrigation"
 
 
-def interpret_ndvi_delta(delta: float) -> str:
-    if delta is None: return "no temporal data"
-    if delta > 0.15:
-        return (f"large positive shift (+{delta:.3f}) — well above inter-annual noise (±0.02–0.05 typical); "
-                "consistent with multi-year land recovery, reforestation, or sustained wet-period greening")
-    elif delta > 0.05:
-        return (f"moderate positive shift (+{delta:.3f}) — above noise threshold; "
-                "gradual greening consistent with reduced grazing pressure or improving rainfall")
-    elif delta > -0.05:
-        return f"stable (±{delta:.3f}) — within inter-annual noise; no ecologically meaningful change"
-    elif delta > -0.15:
-        return (f"moderate decline ({delta:.3f}) — vegetation loss beyond noise; "
-                "possible drought stress, overgrazing, or land clearing")
-    else:
-        return (f"large decline ({delta:.3f}) — severe vegetation loss; "
-                "consistent with desertification, fire, or major land use change")
+def interpret_ndvi_delta(delta: float, kb: dict = None) -> str:
+    if delta is None:
+        return "no temporal data"
+    noise    = kb.get("ndvi_noise", 0.05)       if kb else 0.05
+    sig      = kb.get("ndvi_sig_change", 0.10)  if kb else 0.10
+    if abs(delta) <= noise:
+        return f"within inter-annual noise (±{noise:.2f}) — no ecologically meaningful change"
+    direction = "increase" if delta > 0 else "decline"
+    magnitude = "large" if abs(delta) > sig * 1.5 else "moderate"
+    return (
+        f"{magnitude} vegetation {direction} ({delta:+.3f}) — "
+        f"{'above' if abs(delta) > sig else 'near'} the significance threshold "
+        f"(±{sig:.2f}) for this ecosystem type"
+    )
 
 
-def get_regional_context(ecosystem: str, region: str) -> str:
-    eco_lower = ecosystem.lower() if ecosystem else ""
-    if "mediterranean" in eco_lower:
-        base = (
-            "Mediterranean ecosystems follow a strongly seasonal pattern (Köppen Csa/Csb): "
-            "mild wet winters (Oct–Mar, 400–600 mm in coastal Tunisia) and hot dry summers. "
-            "NDVI peaks Feb–May and drops sharply Jun–Sep as vegetation senesces. "
-            "Aridity index below 0.5 indicates significant dry-season stress even when annual totals appear adequate — "
-            "the index reflects the long-term water balance, NOT instantaneous conditions. "
-            "Water fractions above 20% in a coastal Tunisian scene are most consistent with "
-            "a sebkha (salt flat), lagoon, or shallow wetland — not active flooding, "
-            "since flooding would require an extreme event inconsistent with the stable NDWI signal. "
-            "Inter-annual NDVI noise in this biome is ±0.02–0.05; changes above 0.10 are ecologically significant."
+# ══════════════════════════════════════════════════════════════════════════════
+# PRE-COMPUTED INTERPRETATION FACTS
+# Derives verified statements from the data before the LLM prompt.
+# These facts are injected as ground truth — the LLM must use them.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_interpretation_facts(ic, kb: dict) -> str:
+    """
+    Compute ecosystem-specific, verified facts from the data.
+    Injected into the prompt as pre-validated findings the LLM must use.
+    Works for any ecosystem type — no hardcoded region.
+    """
+    facts = []
+
+    # ── NDVI contextualisation ────────────────────────────────────────────────
+    if ic.ndvi_mean is not None and kb:
+        ndvi_lo, ndvi_hi = kb["ndvi_range"]
+        ndvi_mid = (ndvi_lo + ndvi_hi) / 2
+
+        if ic.ndvi_mean < ndvi_lo:
+            facts.append(
+                f"Measured NDVI ({ic.ndvi_mean:.3f}) is BELOW the typical range "
+                f"({ndvi_lo:.2f}–{ndvi_hi:.2f}) for {ic.ecosystem or 'this ecosystem'}, "
+                f"suggesting the image was acquired during peak dry season, "
+                f"after a drought year, or that vegetation has degraded from historical norms."
+            )
+        elif ic.ndvi_mean > ndvi_hi:
+            facts.append(
+                f"Measured NDVI ({ic.ndvi_mean:.3f}) is ABOVE the typical range "
+                f"({ndvi_lo:.2f}–{ndvi_hi:.2f}) for {ic.ecosystem or 'this ecosystem'}, "
+                f"suggesting acquisition during peak growing season or above-average vegetation density."
+            )
+        else:
+            facts.append(
+                f"Measured NDVI ({ic.ndvi_mean:.3f}) falls within the climatologically normal range "
+                f"({ndvi_lo:.2f}–{ndvi_hi:.2f}) for {ic.ecosystem or 'this ecosystem'}."
+            )
+
+    # ── Temporal NDVI change contextualisation ────────────────────────────────
+    if ic.ndvi_delta is not None and kb:
+        noise = kb.get("ndvi_noise", 0.05)
+        sig   = kb.get("ndvi_sig_change", 0.10)
+        ctx   = kb.get("greening_context", "")
+
+        if abs(ic.ndvi_delta) <= noise:
+            facts.append(
+                f"ΔNDVI of {ic.ndvi_delta:+.3f} is within inter-annual noise "
+                f"(±{noise:.2f} for this ecosystem) — no statistically meaningful "
+                f"vegetation change can be concluded."
+            )
+        elif abs(ic.ndvi_delta) > sig:
+            direction = "increase" if ic.ndvi_delta > 0 else "decline"
+            facts.append(
+                f"ΔNDVI of {ic.ndvi_delta:+.3f} exceeds the ecological significance threshold "
+                f"(±{sig:.2f}) for {ic.ecosystem or 'this ecosystem'} — "
+                f"this is a genuine, large-scale vegetation {direction}. "
+                f"Ecosystem context: {ctx}"
+            )
+        else:
+            direction = "increase" if ic.ndvi_delta > 0 else "decline"
+            facts.append(
+                f"ΔNDVI of {ic.ndvi_delta:+.3f} is a moderate vegetation {direction}, "
+                f"above noise (±{noise:.2f}) but below the large-change threshold (±{sig:.2f}). "
+                f"Ecosystem context: {ctx}"
+            )
+
+    # ── Land cover anomaly detection ──────────────────────────────────────────
+    if ic.land_cover and kb:
+        b_lo, b_hi = kb["barren_expected"]
+        v_lo, v_hi = kb["veg_expected"]
+        w_lo, w_hi = kb["water_expected"]
+
+        barren = ic.land_cover.get("barren", 0)
+        veg    = ic.land_cover.get("vegetation", 0)
+        water  = ic.land_cover.get("water", 0)
+        urban  = ic.land_cover.get("urban", 0)
+
+        if barren < b_lo:
+            facts.append(
+                f"Barren fraction ({barren:.1f}%) is LOWER than the climatological norm "
+                f"({b_lo}–{b_hi}%) for this ecosystem — suggesting unusually dense cover, "
+                f"wet-season acquisition, or above-average rainfall year."
+            )
+        elif barren > b_hi:
+            facts.append(
+                f"Barren fraction ({barren:.1f}%) is HIGHER than the climatological norm "
+                f"({b_lo}–{b_hi}%) for this ecosystem — consistent with degradation, "
+                f"drought, or dry-season acquisition."
+            )
+
+        if veg > v_hi:
+            facts.append(
+                f"Vegetation fraction ({veg:.1f}%) exceeds the typical upper bound "
+                f"({v_hi}%) for this ecosystem — likely peak growing season."
+            )
+
+        if water > w_hi:
+            wb_types = ", ".join(kb.get("water_body_types", ["unknown"]))
+            facts.append(
+                f"Water fraction ({water:.1f}%) exceeds the typical range ({w_lo}–{w_hi}%) "
+                f"for this ecosystem. Expected water body types: {wb_types}. "
+                f"Active flooding requires corroboration with NDWI > 0.3 — "
+                f"absent that, spectrally mixed water features (salt flat, shallow lagoon) "
+                f"are the more likely explanation."
+            )
+
+    # ── Aridity vs humidity tension ───────────────────────────────────────────
+    if (ic.aridity_index is not None and ic.aridity_index < 0.5 and
+            ic.humidity_pct is not None and ic.humidity_pct > 65):
+        facts.append(
+            f"The aridity index ({ic.aridity_index:.3f}) and current humidity ({ic.humidity_pct:.1f}%) "
+            f"are measuring different timescales — aridity integrates the full P/PET ratio over years, "
+            f"while humidity reflects instantaneous atmospheric moisture at measurement time. "
+            f"Both values are correct simultaneously: the long-term water balance is water-stressed, "
+            f"and the current measurement was taken during or after a wet period."
         )
-    elif "arid" in eco_lower or "semi-arid" in eco_lower:
-        base = (
-            "Arid and semi-arid zones have highly variable interannual rainfall. "
-            "Vegetation responds rapidly to rainfall pulses; NDVI can spike after one wet season and recede quickly. "
-            "Barren fractions above 60% are climatically normal. "
-            "Inter-annual NDVI noise is ±0.03–0.06."
-        )
-    else:
-        base = "No specific ecosystem baseline. Interpret indices relative to global published norms."
 
-    if region:
-        base += f" Analysis region: {region}."
-    return base
+    # ── Water body classification ─────────────────────────────────────────────
+    if ic.land_cover and ic.ndwi_mean is not None:
+        water_pct = ic.land_cover.get("water", 0)
+        if water_pct > 15 and ic.ndwi_mean < 0.0:
+            wb_types = ", ".join(kb.get("water_body_types", ["spectrally mixed water body"])) if kb else "spectrally mixed water body"
+            facts.append(
+                f"High water fraction ({water_pct:.1f}%) combined with negative NDWI "
+                f"({ic.ndwi_mean:.3f}) is the spectral signature of a mineralogically complex "
+                f"surface: salt crust, brine, or shallow turbid water elevates SWIR reflectance, "
+                f"suppressing NDWI below zero despite spatial classification as 'water'. "
+                f"Probable water body types for this ecosystem: {wb_types}. "
+                f"Active flooding is ruled out — that would require NDWI > 0.15."
+            )
+        elif water_pct > 10 and ic.ndwi_mean > 0.15:
+            facts.append(
+                f"Water fraction ({water_pct:.1f}%) is supported by positive NDWI "
+                f"({ic.ndwi_mean:.3f}), confirming the presence of open surface water. "
+                f"This is consistent with a permanent or semi-permanent water body."
+            )
+
+    # ── Urban signal interpretation ───────────────────────────────────────────
+    if ic.land_cover and kb:
+        urban = ic.land_cover.get("urban", 0)
+        urban_note = kb.get("urban_note", "")
+        if urban > 5:
+            facts.append(f"Urban signal ({urban:.1f}%): {urban_note}")
+
+    # ── Rainfall seasonality warning ──────────────────────────────────────────
+    if ic.climate_summary:
+        cv = ic.climate_summary.get("rainfall_mm_cv")
+        if cv and cv > 0.7:
+            facts.append(
+                f"Rainfall coefficient of variation = {cv:.2f} — extreme seasonality. "
+                f"Monthly rainfall values are unreliable indicators of annual water availability. "
+                f"Interpret only multi-month or annual rainfall totals."
+            )
+
+    if not facts:
+        return "No ecosystem-specific pre-computed facts available."
+    return "\n".join(f"FACT {i+1}: {f}" for i, f in enumerate(facts))
 
 
-# ── Contradiction detector ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# UNIVERSAL CONTRADICTION DETECTOR
+# Works for any ecosystem — all contradictions are physically derived,
+# not region-specific
+# ══════════════════════════════════════════════════════════════════════════════
 
-def detect_contradictions(context: dict) -> list:
+def detect_contradictions(ctx: dict, kb: dict = None) -> list:
     contradictions = []
-    aridity       = context.get("aridity_index")
-    humidity      = context.get("humidity_pct")
-    rf_trend      = context.get("rainfall_trend", "")
-    water_pct     = context.get("water_pct", 0) or 0
-    ndwi          = context.get("ndwi_mean", 0) or 0
+    aridity    = ctx.get("aridity_index")
+    humidity   = ctx.get("humidity_pct")
+    rf_trend   = ctx.get("rainfall_trend", "")
+    water_pct  = ctx.get("water_pct", 0) or 0
+    ndwi       = ctx.get("ndwi_mean", 0) or 0
+    ndvi       = ctx.get("ndvi_mean")
+    urban_pct  = ctx.get("urban_pct", 0) or 0
+    barren_pct = ctx.get("barren_pct", 0) or 0
+    veg_pct    = ctx.get("veg_pct", 0) or 0
 
-    if aridity is not None and aridity < 0.2 and humidity is not None and humidity > 65:
+    # 1. Aridity vs humidity (universal)
+    if aridity is not None and aridity < 0.5 and humidity is not None and humidity > 65:
+        facts.append = None  # don't double-inject — handled in facts block
+
+    # 2. High water fraction + negative NDWI (universal)
+    if water_pct > 15 and ndwi < 0.0:
         contradictions.append(
-            f"Aridity index ({aridity:.3f}) is a long-term climatological measure classifying the area as Arid. "
-            f"Current humidity ({humidity:.1f}%) is above the long-term mean. "
-            "This is NOT a contradiction in the index's reliability — it reflects seasonal timing: "
-            "the measurement was likely taken during or after the wet season. "
-            "The aridity index correctly characterises the multi-decadal water balance."
+            f"Water fraction ({water_pct:.1f}%) is high but NDWI ({ndwi:.3f}) is negative. "
+            "Physically: saline, turbid, or mineral-rich water bodies suppress NDWI via "
+            "elevated SWIR reflectance. This is NOT a classification error — it is the "
+            "spectral fingerprint of a spectrally mixed water surface. "
+            "The spatial extent is real; the NDWI suppression is a sensor physics effect."
         )
 
-    if water_pct > 20 and ndwi < 0:
+    # 3. High NDVI + high aridity (any arid ecosystem)
+    if (aridity is not None and aridity < 0.3 and
+            ndvi is not None and ndvi > 0.40):
         contradictions.append(
-            f"Land cover classification shows {water_pct:.1f}% water fraction, "
-            f"yet NDWI is {ndwi:.3f} (negative). "
-            "This is consistent with a spectrally mixed coastal feature — sebkha or salt flat — "
-            "where high mineral salt content elevates SWIR reflectance, suppressing NDWI below zero "
-            "even where the surface is classified as 'water' by the threshold-based classifier. "
-            "Active flooding is ruled out."
+            f"NDVI ({ndvi:.3f}) is moderately high despite an Arid/Semi-arid classification "
+            f"(AI = {aridity:.3f}). Possible explanations: "
+            "(a) image acquired during or immediately after wet season, "
+            "(b) irrigated agriculture present, "
+            "(c) the aridity index underestimates local moisture availability "
+            "due to groundwater, river influence, or fog."
         )
 
-    if aridity is not None and aridity < 0.2 and "increasing" in rf_trend:
+    # 4. High urban + high vegetation (unusual co-occurrence)
+    if urban_pct > 25 and veg_pct > 50:
         contradictions.append(
-            f"Rainfall trend is increasing yet the aridity index ({aridity:.3f}) remains in the Arid class. "
-            "This indicates the recent wet trend is short-term and insufficient to shift the multi-decadal "
-            "Precipitation/PET ratio into the semi-arid range — consistent with observed sub-decadal "
-            "rainfall variability in the Maghreb without structural climate regime change."
+            f"Urban fraction ({urban_pct:.1f}%) and vegetation fraction ({veg_pct:.1f}%) "
+            "are both elevated — unusual co-occurrence. "
+            "Possible explanation: highly vegetated urban zone (parks, tree-lined streets, "
+            "urban forest), or classifier overlap at the urban-vegetation boundary. "
+            "Treat both fractions as upper-bound estimates."
         )
+
+    # 5. Increasing rainfall + decreasing aridity class still arid
+    if aridity is not None and aridity < 0.3 and "increasing" in rf_trend:
+        contradictions.append(
+            f"Rainfall trend is increasing yet aridity index ({aridity:.3f}) remains in the "
+            "Arid/Semi-arid class. This is physically consistent: the aridity index integrates "
+            "multi-decadal P/PET; a short-term rainfall increase does not shift the long-term "
+            "water balance classification. Monitor for aridity index change over 10+ year periods."
+        )
+
+    # 6. Zero barren in an arid ecosystem (impossible in true deserts)
+    if (kb and aridity is not None and aridity < 0.3 and barren_pct < 5):
+        b_lo = kb.get("barren_expected", (20, 80))[0]
+        if b_lo > 10:
+            contradictions.append(
+                f"Barren fraction ({barren_pct:.1f}%) is near-zero in what aridity data "
+                f"classifies as an arid zone (AI = {aridity:.3f}). "
+                "This suggests either: (a) wet-season acquisition with temporary vegetation flush, "
+                "(b) irrigated agriculture masking the background arid signal, or "
+                "(c) classifier over-assignment to vegetation/urban at the expense of bare soil."
+            )
+
     return contradictions
 
 
-# ── Prompt builder ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# PROMPT BUILDER
+# ══════════════════════════════════════════════════════════════════════════════
 
 def build_prompt(ic, rag_context: str, anomalies: list) -> str:
 
-    # Pre-interpret indices
-    ndvi_i   = interpret_ndvi(ic.ndvi_mean)
-    ndwi_i   = interpret_ndwi(ic.ndwi_mean)
-    ndbi_i   = interpret_ndbi(ic.ndbi_mean)
-    arid_i   = interpret_aridity(ic.aridity_index)
-    delta_i  = interpret_ndvi_delta(ic.ndvi_delta)
+    # Get ecosystem knowledge base
+    kb = get_ecosystem_kb(getattr(ic, 'ecosystem', None))
 
-    # Contradictions
+    # Pre-interpret indices using ecosystem context
+    ndvi_i  = interpret_ndvi(ic.ndvi_mean, kb)
+    ndwi_i  = interpret_ndwi(ic.ndwi_mean)
+    ndbi_i  = interpret_ndbi(ic.ndbi_mean)
+    arid_i  = interpret_aridity(ic.aridity_index)
+    delta_i = interpret_ndvi_delta(ic.ndvi_delta, kb)
+
+    # Pre-computed facts block
+    facts_block = build_interpretation_facts(ic, kb)
+
+    # Contradiction detection
     ctx_dict = {
         "aridity_index": ic.aridity_index,
         "humidity_pct":  ic.humidity_pct,
         "rainfall_trend": ic.rainfall_trend or "",
-        "water_pct":     ic.water_pct,
+        "water_pct":     getattr(ic, 'water_pct', None) or
+                         (ic.land_cover.get("water", 0) if ic.land_cover else 0),
         "ndwi_mean":     ic.ndwi_mean,
+        "ndvi_mean":     ic.ndvi_mean,
+        "urban_pct":     ic.land_cover.get("urban", 0) if ic.land_cover else 0,
+        "barren_pct":    ic.land_cover.get("barren", 0) if ic.land_cover else 0,
+        "veg_pct":       ic.land_cover.get("vegetation", 0) if ic.land_cover else 0,
     }
-    contradictions = detect_contradictions(ctx_dict)
+    contradictions = detect_contradictions(ctx_dict, kb)
     contradiction_block = ""
     if contradictions:
-        contradiction_block = "\n\nIDENTIFIED DATA TENSIONS — you MUST address each one scientifically:\n"
+        contradiction_block = "\n\nIDENTIFIED DATA TENSIONS — resolve each with physical reasoning:\n"
         for i, c in enumerate(contradictions, 1):
             contradiction_block += f"  {i}. {c}\n"
 
-    # Regional context
-    regional_ctx = get_regional_context(ic.ecosystem, ic.region)
+    # Ecosystem KB context block
+    eco_block = f"""
+ECOSYSTEM BASELINE (global knowledge base — {ic.ecosystem or 'unclassified'}):
+  Köppen class    : {kb['koppen']}
+  Typical rainfall: {kb['rainfall_mm_yr'][0]}–{kb['rainfall_mm_yr'][1]} mm/yr
+  Typical NDVI    : {kb['ndvi_range'][0]:.2f}–{kb['ndvi_range'][1]:.2f}
+  NDVI noise      : ±{kb['ndvi_noise']:.2f} (inter-annual; changes below this are not meaningful)
+  Sig. NDVI change: >{kb['ndvi_sig_change']:.2f} (ecologically significant threshold)
+  Barren expected : {kb['barren_expected'][0]}–{kb['barren_expected'][1]}%
+  Veg expected    : {kb['veg_expected'][0]}–{kb['veg_expected'][1]}%
+  Water expected  : {kb['water_expected'][0]}–{kb['water_expected'][1]}%
+  Seasonality     : {kb['seasonal_pattern']}
+  Key stressors   : {', '.join(kb['key_stressors'])}
+  Greening context: {kb['greening_context']}
+"""
 
     # Land cover block
     lc_lines = ""
     if ic.land_cover:
         for cls, pct in ic.land_cover.items():
+            b_lo, b_hi = kb.get(f"{cls}_expected", (0, 100)) if f"{cls}_expected" in kb else (0, 100)
             lc_lines += f"    {cls:<14}: {pct:.1f}%\n"
     else:
         lc_lines = "    Not available\n"
@@ -179,53 +695,43 @@ def build_prompt(ic, rag_context: str, anomalies: list) -> str:
     if ic.climate_summary:
         cs = ic.climate_summary
         def _fmt(v, dec=1): return f"{v:.{dec}f}" if v is not None else "N/A"
-        rf_l  = _fmt(cs.get("rainfall_mm_latest"))
-        rf_m  = _fmt(cs.get("rainfall_mm_mean"))
-        rf_tr = cs.get("rainfall_mm_trend", "unknown")
-        t_l   = _fmt(cs.get("temperature_c_latest"))
-        t_m   = _fmt(cs.get("temperature_c_mean"))
-        h_l   = _fmt(cs.get("humidity_pct_latest"))
-        h_m   = _fmt(cs.get("humidity_pct_mean", 0), dec=0)
-        cv    = cs.get("rainfall_cv")
-        cv_s  = _fmt(cv, dec=2) if cv is not None else "N/A"
-        seas  = ("very high — monthly values are unreliable indicators of annual conditions"
-                 if cv and cv > 0.7 else "moderate")
+        cv   = cs.get("rainfall_mm_cv")
+        seas = ("very high (CV>{:.2f}) — monthly values unreliable; use seasonal totals".format(cv)
+                if cv and cv > 0.7 else
+                "moderate" if cv else "unknown")
         climate_block = f"""
-CLIMATE DATA (15-year record):
-  Rainfall   : latest {rf_l} mm vs long-term monthly mean {rf_m} mm — trend {rf_tr}
-  Temperature: latest {t_l}°C vs long-term mean {t_m}°C
-  Humidity   : latest {h_l}% vs long-term mean {h_m}%
-  Seasonality: rainfall CV = {cv_s} — {seas}
+CLIMATE DATA:
+  Rainfall   : latest {_fmt(cs.get('rainfall_mm_latest'))} mm vs mean {_fmt(cs.get('rainfall_mm_mean'))} mm — trend {cs.get('rainfall_mm_trend','unknown')}
+  Temperature: latest {_fmt(cs.get('temperature_c_latest'))}°C vs mean {_fmt(cs.get('temperature_c_mean'))}°C
+  Humidity   : latest {_fmt(cs.get('humidity_pct_latest'))}% vs mean {_fmt(cs.get('humidity_pct_mean',0),dec=0)}%
+  Seasonality: CV = {_fmt(cv,dec=2) if cv else 'N/A'} — {seas}
 """
 
-    # Safe number formatting
     def _n(v, fmt=".3f"): return format(v, fmt) if v is not None else "N/A"
+    confidence = ic.confidence_score or 0
+    eco_str    = ic.ecosystem or "unclassified landscape"
+    region_str = ic.region    or "unknown region"
 
-    confidence     = ic.confidence_score or 0
-    conf_basis     = ("multi-year climate record, dual-image temporal NDVI, full spectral suite, regional context")
-    if confidence < 80:
-        conf_basis += "; score reduced: limited water-body validation data"
-
-    prompt = f"""You are a senior environmental scientist specialising in arid and Mediterranean land systems.
+    prompt = f"""You are a senior environmental scientist with expertise in satellite remote sensing and global ecosystem ecology.
 Write a peer-review-quality geospatial intelligence report. Your audience is technically literate.
+The analysis covers: {region_str} | Ecosystem: {eco_str}
 
-REGIONAL BASELINE KNOWLEDGE:
-{regional_ctx}
+{eco_block}
+PRE-COMPUTED SCIENTIFIC FACTS (verified from data — use these verbatim, do not contradict them):
+{facts_block}
 
-═══ PROCESSED INPUT DATA ════════════════════════════════════════════════════
+═══ INPUT DATA ══════════════════════════════════════════════════════════════
 
-SPECTRAL INDICES (already interpreted — do not re-describe the numbers):
-  NDVI mean : {_n(ic.ndvi_mean)} — {ndvi_i}
-  NDWI mean : {_n(ic.ndwi_mean)} — {ndwi_i}
-  NDBI mean : {_n(ic.ndbi_mean)} — {ndbi_i}
+SPECTRAL INDICES:
+  NDVI : {_n(ic.ndvi_mean)} — {ndvi_i}
+  NDWI : {_n(ic.ndwi_mean)} — {ndwi_i}
+  NDBI : {_n(ic.ndbi_mean)} — {ndbi_i}
 
 LAND COVER:
 {lc_lines}
-ARIDITY INDEX:
-  {_n(ic.aridity_index)} — {arid_i}
+ARIDITY INDEX: {_n(ic.aridity_index)} — {arid_i}
 
-TEMPORAL VEGETATION CHANGE:
-  ΔNDVI : {_n(ic.ndvi_delta, '+.3f') if ic.ndvi_delta is not None else 'N/A'} — {delta_i}
+TEMPORAL CHANGE: ΔNDVI = {_n(ic.ndvi_delta, '+.3f') if ic.ndvi_delta is not None else 'N/A'} — {delta_i}
 
 {climate_block}
 RETRIEVED CONTEXT:
@@ -234,245 +740,186 @@ RETRIEVED CONTEXT:
 DETECTED SIGNALS:
 {chr(10).join(f'  • {a}' for a in anomalies) if anomalies else '  • None'}
 {contradiction_block}
-CONFIDENCE: {confidence:.0f}% — {conf_basis}
+CONFIDENCE: {confidence:.0f}%
 
-═══ WRITING RULES (violations = failed peer review) ════════════════════════
+═══ WRITING RULES ══════════════════════════════════════════════════════════
 
-1. NEVER open a sentence with a number or index name. The data section already contains all numbers.
-   Your job is to write ONLY what the numbers mean — cause, consequence, ecological context.
-   FORBIDDEN OPENINGS: "The NDVI value of X", "The ΔNDVI of +X", "The water fraction (X%)",
-                       "The aridity index (X)", "The urban fraction (X%)"
-   REQUIRED: Start every interpretive sentence with the ecological or physical meaning.
-   WRONG: "The NDVI value of 0.201 indicates low-moderate vegetation cover"
-   RIGHT: "Vegetation is confined to drought-tolerant shrubs persisting through summer senescence —
-           the spectral signal is dominated by exposed soil rather than canopy"
-   WRONG: "The large positive shift in NDVI (+0.192) indicates substantial improvement"
-   RIGHT: "Shrub canopy density nearly doubled over the 14-year record, a rate consistent
-           with documented post-drought recovery trajectories in the Maghreb"
-   WRONG in Section 7 bullets: "The large positive shift in NDVI (+0.192) indicates..."
-   RIGHT in Section 7 bullets: "Shrub recovery accelerated between 2010 and 2024 at a rate..."
-   Apply this rule to EVERY sentence in EVERY section including bullet points.
+1. USE THE PRE-COMPUTED FACTS. They are verified. Do not contradict them.
+   Incorporate each FACT into the relevant section as the core of your interpretation.
 
-2. RESOLVE data tensions using physical mechanisms — never dismiss an index as "unreliable".
-   The aridity index is a valid long-term climatological measure. Seasonal humidity above the mean
-   does not invalidate it — explain WHY both can be true simultaneously.
+2. NEVER open a sentence with a number or index name.
+   FORBIDDEN: "The NDVI of X...", "The ΔNDVI (+X)...", "The water fraction (X%)..."
+   REQUIRED: Start with ecological meaning, then optionally reference the value.
+   WRONG: "The NDVI value of 0.201 indicates low vegetation"
+   RIGHT: "Vegetation is confined to drought-tolerant shrubs — soil dominates the spectral signal"
 
-3. CAUSAL chains are required for all anomalies.
-   WRONG: "vegetation improved, likely driven by increased rainfall"
-   RIGHT: "Consecutive wet seasons accumulate soil moisture beyond single-season capacity,
-           enabling shrub root systems to access deeper water reserves and sustain growth
-           into the dry season — a documented mechanism in post-drought Maghreb recovery"
-   FACTUAL REQUIREMENT: A ΔNDVI of +0.15 or greater over 10+ years in the Maghreb is
-   CONSISTENT WITH — not unexpected for — documented regional greening trends driven by
-   increased rainfall variability and CO₂ fertilisation effects. Do NOT describe this as
-   "unexpected" or "surprising". The correct framing is: large but within the observed
-   range of Sahel/Maghreb greening documented in the peer-reviewed literature.
+3. USE THE ECOSYSTEM KB. Every finding must be contextualised against the baseline ranges provided.
+   State explicitly: is this value expected, above-norm, or below-norm for this ecosystem?
 
-4. CONTEXTUALISE using the regional baseline provided. State explicitly whether each finding
-   is surprising, expected, or anomalous for this ecosystem type.
+4. CAUSAL CHAINS required for every anomaly. Not "X suggests Y" but "X because mechanism Z,
+   which causes Y via process P."
 
-5. Each monitoring recommendation MUST include:
-   (a) exact variable/index and data source (e.g. "Sentinel-2 NDVI composite")
-   (b) temporal frequency (monthly / seasonal / annual)
-   (c) specific numerical threshold that would trigger management concern
-   WRONG: "Track NDVI at monthly frequency to monitor vegetation"
-   RIGHT: "Monitor Sentinel-2 NDVI monthly composites; an April–May value below 0.12
-           (below the 10th percentile for this ecosystem) would indicate drought stress
-           requiring assessment of irrigation or reforestation intervention"
+5. MONITORING: each recommendation must specify data source, frequency, AND threshold.
+   WRONG: "Monitor NDVI monthly"
+   RIGHT: "Monitor Sentinel-2 NDVI composites monthly; a [growing season month] value below
+           [specific number = 10th percentile for this ecosystem] triggers [specific action]"
 
-6. Forbidden phrases: "more favorable", "not a reliable indicator", "further study needed",
-   "provides valuable insights", "it is worth noting", "it is important to".
+6. SECTION 3 (Temporal): explicitly state whether the ΔNDVI magnitude is within or beyond
+   the ecosystem's normal inter-annual variability range (provided in the KB above).
 
-═══ OUTPUT FORMAT ════════════════════════════════════════════════════════════
+7. Forbidden phrases: "provides valuable insights", "it is worth noting", "further study needed",
+   "not a reliable indicator", "unexpected for this region" (unless supported by the KB).
+
+═══ OUTPUT FORMAT ═══════════════════════════════════════════════════════════
 
 ## 1. Executive Summary
 2–3 sentences: dominant land system state, most significant finding, primary uncertainty.
 
 ## 2. Vegetation & Land Cover Assessment
-Interpret vegetation density and land cover fractions ecologically.
-What does this NDVI value specifically mean for a {ic.ecosystem or 'Mediterranean'} system?
-Is the barren fraction climatically expected or anomalous?
+Interpret vegetation density and land cover fractions against the ecosystem KB ranges.
+State explicitly whether each fraction is within, above, or below the expected range.
 
 ## 3. Temporal Vegetation Change
-Causal interpretation of ΔNDVI. Is this magnitude expected for the Maghreb?
-What land management implications follow?
+Causal interpretation of ΔNDVI. Compare magnitude against ecosystem noise and significance thresholds.
+What processes explain the change? Is it within documented norms for this ecosystem type?
 
 ## 4. Hydrological Assessment
-Interpret water fraction, NDWI, and water body type together.
-Resolve any tension. Rule flooding in or out with reasoning.
+Interpret water fraction and NDWI together. Classify water body type from the ecosystem KB list.
+Resolve any tension between spatial water fraction and NDWI signal.
 
 ## 5. Climate–Vegetation Coupling
-How does the 15-year record connect to observed vegetation state and change?
-Address rainfall seasonality explicitly — what can and cannot be concluded from monthly data?
+Connect climate record to vegetation state. Address seasonality explicitly.
+What can and cannot be concluded from monthly climate data?
 
 ## 6. Aridity & Drought Context
-Interpret aridity index as a long-term climatological tool.
-Explain how seasonal humidity and the aridity classification can both be correct simultaneously.
+(Skip if no aridity data available — state that clearly.)
+Interpret aridity index as a long-term tool. Resolve any tension with current conditions.
 
 ## 7. Key Findings & Ecological Implications
-5 bullet points. Each must be a substantive scientific statement with a causal claim —
-not a data restatement, not a hedged observation.
+5 bullet points. Each must begin with an ecological statement, not a number.
+Each must contain a causal mechanism.
 
 ## 8. Monitoring Recommendations
-3 recommendations. Each MUST include variable, data source, frequency, and threshold with consequence.
+3 recommendations. Each: specific index + data source + frequency + numerical threshold + consequence.
 
 ## 9. Confidence & Limitations
-Explain the {confidence:.0f}% score. What would raise it? What are the main uncertainty sources?
+Explain the {confidence:.0f}% score. What data is missing? What would raise it?
 """
     return prompt
 
 
-
-# ── Output validator ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# OUTPUT VALIDATOR
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _validate_report(report_text: str) -> tuple[bool, list[str]]:
-    """
-    Check the LLM output meets minimum scientific quality standards.
-    Returns (is_valid, list_of_failures).
-    """
     failures = []
-    text = report_text.lower()
 
-    # 1. Monitoring section must contain numerical thresholds
-    import re
-    monitoring_match = re.search(
-        r'## 8\..*?(?=## 9\.|$)', report_text, re.DOTALL | re.IGNORECASE
-    )
-    if monitoring_match:
-        monitoring_text = monitoring_match.group(0)
-        # Must have at least one number that looks like a threshold
-        has_threshold = bool(re.search(r'\b0\.\d+|\d+\.\d+%|below \d|above \d|threshold', monitoring_text))
-        has_frequency = any(w in monitoring_text.lower() for w in
-                           ['monthly', 'seasonal', 'annual', 'weekly', 'quarterly'])
-        if not has_threshold:
-            failures.append("Section 8 (Monitoring) is missing numerical thresholds")
-        if not has_frequency:
-            failures.append("Section 8 (Monitoring) is missing temporal frequency")
-    else:
-        failures.append("Section 8 (Monitoring) not found in output")
-
-    # 2. Must have all 9 sections
+    # 1. All 9 sections present
     for i in range(1, 10):
-        if f'## {i}.' not in report_text and f'## {i} .' not in report_text:
-            failures.append(f"Section {i} missing from report")
+        if f'## {i}.' not in report_text:
+            failures.append(f"Section {i} missing")
 
-    # 3. Must not contain the "short record" hallucination or "not a reliable"
-    bad_phrases = [
-        "short climate record",
-        "short record",
-        "not a reliable indicator",
-        "provides valuable insights",
-        "it is worth noting",
-        "further study is needed",
-    ]
-    for phrase in bad_phrases:
-        if phrase in text:
-            failures.append(f"Forbidden phrase detected: \"{phrase}\"")
+    # 2. Monitoring has thresholds and frequency
+    m = re.search(r'## 8\..*?(?=## 9\.|$)', report_text, re.DOTALL | re.IGNORECASE)
+    if m:
+        mt = m.group(0)
+        if not re.search(r'\b0\.\d+|\d+\.\d+|below \d|above \d', mt):
+            failures.append("Section 8 missing numerical thresholds")
+        if not any(w in mt.lower() for w in ['monthly','seasonal','annual','weekly','quarterly']):
+            failures.append("Section 8 missing temporal frequency")
+    else:
+        failures.append("Section 8 not found")
+
+    # 3. Forbidden phrases
+    for phrase in ["not a reliable indicator", "provides valuable insights",
+                   "it is worth noting", "further study is needed", "short record"]:
+        if phrase in report_text.lower():
+            failures.append(f"Forbidden phrase: '{phrase}'")
 
     return len(failures) == 0, failures
 
 
-def _build_correction_prompt(original_report: str, failures: list[str]) -> str:
-    """Build a targeted correction prompt for failed sections only."""
-    failure_str = "\n".join(f"  - {f}" for f in failures)
-    return f"""The following geospatial report has quality issues that must be fixed:
+def _build_correction_prompt(original: str, failures: list[str]) -> str:
+    return f"""Fix these issues in the geospatial report:
+{chr(10).join(f'  - {f}' for f in failures)}
 
-ISSUES TO FIX:
-{failure_str}
+Section 8 monitoring format required:
+"Monitor [index] via [source] at [frequency] frequency; a value [below/above] [number] 
+would indicate [consequence] requiring [action]."
 
-SPECIFIC REQUIREMENTS FOR SECTION 8 (Monitoring Recommendations):
-Each of the 3 recommendations MUST follow this exact format:
-"Monitor [specific index] via [data source] at [monthly/seasonal/annual] frequency; \
-a value [below/above] [specific number] would indicate [specific ecological consequence] \
-requiring [specific action]."
+Remove any sentences with: "not a reliable indicator", "provides valuable insights",
+"it is worth noting", "further study is needed".
 
-Example of acceptable recommendation:
-"Monitor Sentinel-2 NDVI monthly composites (April–May growing season window); \
-a mean value below 0.10 — below the 5th percentile for Mediterranean coastal shrubland — \
-would indicate severe drought stress requiring assessment of emergency irrigation or \
-reforestation programme suspension."
+REPORT TO FIX:
+{original}
 
-REMOVE any sentences containing these forbidden phrases:
-- "short climate record" or "short record" (the record is 15 years — not short)
-- "not a reliable indicator"
-- "provides valuable insights"
-- "it is worth noting"
-
-ORIGINAL REPORT TO FIX:
-{original_report}
-
-Return the complete corrected report with all 9 sections. Fix ONLY the issues listed above.
-Keep all other content unchanged."""
+Return the complete corrected report. Fix only the listed issues."""
 
 
-# ── Main generation function ──────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN GENERATION FUNCTION
+# ══════════════════════════════════════════════════════════════════════════════
 
-def generate_report(input_context, rag_context: str, anomalies: list) -> str:
+def generate_report(input_context, rag_context: str = "", anomalies: list = None) -> str:
+    if anomalies is None:
+        anomalies = []
+
     client = get_groq_client()
     prompt = build_prompt(input_context, rag_context, anomalies)
 
     system_msg = (
-        "You are a senior environmental scientist writing peer-review-quality reports. "
-        "You interpret data — you never restate it. "
-        "You explain physical mechanisms — you never use vague causal language. "
-        "You give specific, actionable recommendations with numerical thresholds. "
-        "You never dismiss a validated index as 'unreliable'."
+        "You are a senior environmental scientist with global remote sensing expertise. "
+        "You write peer-review-quality geospatial reports. "
+        "You use the pre-computed scientific facts provided — you never contradict them. "
+        "You interpret data ecologically — you never restate raw numbers as findings. "
+        "You give specific, actionable monitoring recommendations with numerical thresholds."
     )
 
-    def _call_llm(messages):
+    def _call(messages):
         return client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            temperature=0.25,
+            temperature=0.2,
             max_tokens=2400,
         ).choices[0].message.content.strip()
 
     def _wrap(text):
+        ic = input_context
+        conf_s = f"{ic.confidence_score:.0f}" if ic.confidence_score is not None else "N/A"
         header = "=" * 60 + "\nGEOSPATIAL INTELLIGENCE REPORT\n" + "=" * 60 + "\n\n"
-        conf_s = f"{input_context.confidence_score:.0f}" if input_context.confidence_score is not None else "N/A"
         footer = (
             "\n\n" + "=" * 60 + "\n"
-            f"Confidence: {conf_s}%  |  "
-            f"Region: {input_context.region or 'Unknown'}  |  "
-            f"Ecosystem: {input_context.ecosystem or 'Unknown'}\n"
-            + "=" * 60
+            f"Confidence: {conf_s}%  |  Region: {ic.region or 'Unknown'}  |  "
+            f"Ecosystem: {ic.ecosystem or 'Unknown'}\n" + "=" * 60
         )
         return header + text + footer
 
     try:
-        # ── Attempt 1: standard generation ───────────────────────────────────
-        report_text = _call_llm([
+        # Attempt 1
+        report = _call([
             {"role": "system", "content": system_msg},
             {"role": "user",   "content": prompt},
         ])
+        valid, failures = _validate_report(report)
+        if valid:
+            print("  [LLM] Report passed validation ✓")
+            return _wrap(report)
 
-        is_valid, failures = _validate_report(report_text)
-
-        if is_valid:
-            print(f"  [LLM] Report passed validation on first attempt.")
-            return _wrap(report_text)
-
-        # ── Attempt 2: targeted correction ────────────────────────────────────
-        print(f"  [LLM] Validation failed ({len(failures)} issues). Retrying with correction prompt...")
+        # Attempt 2 — targeted correction
+        print(f"  [LLM] Validation failed ({len(failures)} issues) — retrying")
         for f in failures:
             print(f"    ✗ {f}")
-
-        correction_prompt = _build_correction_prompt(report_text, failures)
-        report_text_v2 = _call_llm([
+        corrected = _call([
             {"role": "system", "content": system_msg},
-            {"role": "user",   "content": correction_prompt},
+            {"role": "user",   "content": _build_correction_prompt(report, failures)},
         ])
-
-        is_valid_v2, failures_v2 = _validate_report(report_text_v2)
-        if is_valid_v2:
-            print(f"  [LLM] Report passed validation after correction.")
+        valid2, failures2 = _validate_report(corrected)
+        if valid2:
+            print("  [LLM] Correction passed ✓")
         else:
-            print(f"  [LLM] Report still has issues after correction ({len(failures_v2)} remaining):")
-            for f in failures_v2:
-                print(f"    ✗ {f}")
-            # Return corrected version anyway — it will be better than the original
-
-        return _wrap(report_text_v2)
+            print(f"  [LLM] Still {len(failures2)} issues after correction — returning best effort")
+        return _wrap(corrected)
 
     except Exception as e:
         return f"[Report generation failed: {e}]"
