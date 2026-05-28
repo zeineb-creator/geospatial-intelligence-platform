@@ -238,11 +238,20 @@ CONFIDENCE: {confidence:.0f}% — {conf_basis}
 
 ═══ WRITING RULES (violations = failed peer review) ════════════════════════
 
-1. NEVER restate a number without adding ecological meaning beyond what is already stated above.
-   WRONG: "The NDVI value of 0.201 indicates low-moderate vegetation"
-   RIGHT: "Vegetation cover is consistent with open Mediterranean shrubland under summer drought stress,
-           where soil and rock dominate the spectral signal and only drought-tolerant shrubs persist"
-   The numbers are already in the data section. Every sentence you write about them must go FURTHER.
+1. NEVER open a sentence with a number or index name. The data section already contains all numbers.
+   Your job is to write ONLY what the numbers mean — cause, consequence, ecological context.
+   FORBIDDEN OPENINGS: "The NDVI value of X", "The ΔNDVI of +X", "The water fraction (X%)",
+                       "The aridity index (X)", "The urban fraction (X%)"
+   REQUIRED: Start every interpretive sentence with the ecological or physical meaning.
+   WRONG: "The NDVI value of 0.201 indicates low-moderate vegetation cover"
+   RIGHT: "Vegetation is confined to drought-tolerant shrubs persisting through summer senescence —
+           the spectral signal is dominated by exposed soil rather than canopy"
+   WRONG: "The large positive shift in NDVI (+0.192) indicates substantial improvement"
+   RIGHT: "Shrub canopy density nearly doubled over the 14-year record, a rate consistent
+           with documented post-drought recovery trajectories in the Maghreb"
+   WRONG in Section 7 bullets: "The large positive shift in NDVI (+0.192) indicates..."
+   RIGHT in Section 7 bullets: "Shrub recovery accelerated between 2010 and 2024 at a rate..."
+   Apply this rule to EVERY sentence in EVERY section including bullet points.
 
 2. RESOLVE data tensions using physical mechanisms — never dismiss an index as "unreliable".
    The aridity index is a valid long-term climatological measure. Seasonal humidity above the mean
@@ -253,6 +262,11 @@ CONFIDENCE: {confidence:.0f}% — {conf_basis}
    RIGHT: "Consecutive wet seasons accumulate soil moisture beyond single-season capacity,
            enabling shrub root systems to access deeper water reserves and sustain growth
            into the dry season — a documented mechanism in post-drought Maghreb recovery"
+   FACTUAL REQUIREMENT: A ΔNDVI of +0.15 or greater over 10+ years in the Maghreb is
+   CONSISTENT WITH — not unexpected for — documented regional greening trends driven by
+   increased rainfall variability and CO₂ fertilisation effects. Do NOT describe this as
+   "unexpected" or "surprising". The correct framing is: large but within the observed
+   range of Sahel/Maghreb greening documented in the peer-reviewed literature.
 
 4. CONTEXTUALISE using the regional baseline provided. State explicitly whether each finding
    is surprising, expected, or anomalous for this ecosystem type.
