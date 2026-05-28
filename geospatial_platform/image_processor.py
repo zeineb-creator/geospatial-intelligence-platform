@@ -226,41 +226,41 @@ def _safe(arr):
     return np.nan_to_num(arr, nan=0.0)
 
 
-def water_score(ndwi, mndwi, ndvi) -> np.ndarray:
+def water_score(ndwi, mndwi, ndvi, bsi) -> np.ndarray:
     """
-    High score = likely water.
-    MNDWI is primary — outperforms NDWI for coastal/turbid water.
+    MNDWI is primary — handles both open water and spectrally mixed
+    coastal features (sebkha, salt flat) where NDWI may be negative.
+    Very low NDVI + negative BSI strongly support water classification.
     """
-    scores = []
-    weights = []
+    scores, weights = [], []
     if mndwi is not None:
-        # MNDWI > 0.05 = water; strong signal
-        scores.append(_sigmoid(_safe(mndwi), center=0.05, slope=25))
+        scores.append(_sigmoid(_safe(mndwi), center=0.05, slope=20))
         weights.append(3.0)
     if ndwi is not None:
-        scores.append(_sigmoid(_safe(ndwi), center=0.05, slope=20))
-        weights.append(1.5)
+        scores.append(_sigmoid(_safe(ndwi), center=0.05, slope=18))
+        weights.append(1.0)
     if ndvi is not None:
-        # Water pixels have NDVI < 0.05
-        scores.append(_inv_sigmoid(_safe(ndvi), center=0.05, slope=30))
+        # Very low NDVI (< 0.04) strongly supports water
+        scores.append(_inv_sigmoid(_safe(ndvi), center=0.04, slope=40))
+        weights.append(1.5)
+    if bsi is not None:
+        # Water/sebkha has negative BSI (no bare soil minerals)
+        scores.append(_inv_sigmoid(_safe(bsi), center=0.02, slope=20))
         weights.append(1.0)
     if not scores:
         return np.zeros(1)
-    weighted_sum = sum(s * w for s, w in zip(scores, weights))
-    return np.clip(weighted_sum / sum(weights), 0, 1)
+    return np.clip(
+        sum(s * w for s, w in zip(scores, weights)) / sum(weights), 0, 1
+    ).astype(np.float32)
 
 
 def vegetation_score(ndvi, evi2, savi, mndwi, bsi) -> np.ndarray:
     """
-    High score = likely vegetation.
-    Requires NDVI > 0.25 to avoid miscounting urban/mixed pixels.
-    BSI acts as a veto — high BSI suppresses vegetation score strongly.
+    Requires NDVI > 0.25 to avoid counting urban/mixed pixels.
+    BSI multiplicative veto: high BSI (impervious/bare) collapses veg score.
     """
-    scores = []
-    weights = []
-
+    scores, weights = [], []
     if ndvi is not None:
-        # Raised center from 0.15 → 0.25: urban mixed pixels top out at ~0.20
         scores.append(_sigmoid(_safe(ndvi), center=0.25, slope=30))
         weights.append(3.0)
     if evi2 is not None:
@@ -269,113 +269,79 @@ def vegetation_score(ndvi, evi2, savi, mndwi, bsi) -> np.ndarray:
     if savi is not None:
         scores.append(_sigmoid(_safe(savi), center=0.20, slope=25))
         weights.append(1.0)
-    if mndwi is not None:
-        # Vegetation has strongly negative MNDWI
-        scores.append(_inv_sigmoid(_safe(mndwi), center=-0.05, slope=20))
-        weights.append(0.8)
-
     if not scores:
         return np.zeros(1)
-
     base = np.clip(
         sum(s * w for s, w in zip(scores, weights)) / sum(weights), 0, 1
     )
-
-    # BSI veto: if BSI > 0, this is bare/urban, not vegetation
-    # Apply a multiplicative suppression so vegetation can't win
-    # in pixels where bare soil / impervious signal dominates
+    # BSI veto: BSI > 0 = bare/impervious dominates → suppress vegetation
     if bsi is not None:
-        bsi_penalty = _inv_sigmoid(_safe(bsi), center=0.0, slope=25)
-        base = base * bsi_penalty
-
+        base = base * _inv_sigmoid(_safe(bsi), center=0.0, slope=30)
     return base.astype(np.float32)
 
 
 def urban_score(ndbi, bsi, ui, mndwi, ndvi) -> np.ndarray:
     """
-    High score = likely urban / built-up / impervious.
-
-    Key insight: in Mediterranean coastal scenes, urban pixels have:
-      BSI  > 0     (bare/impervious dominates over vegetation+soil)
-      NDBI > -0.1  (SWIR1 > NIR, or close)
-      UI   > -0.1  (SWIR2 elevated)
-      MNDWI < -0.1 (dry surface, not water)
-      NDVI  < 0.25 (low-moderate, not dense vegetation)
-
-    BSI is the single best discriminator — lower its threshold significantly.
+    UI (SWIR2/NIR) is the primary urban discriminator — it separates
+    impervious surfaces from bare soil more reliably than NDBI alone.
+    UI > 0 + BSI > 0.04 = strong impervious signal across all sensors.
     """
-    scores = []
-    weights = []
-
-    if bsi is not None:
-        # Primary signal — BSI > -0.05 strongly suggests bare/urban
-        # Lowered center from 0.0 → -0.05 to catch peri-urban pixels
-        scores.append(_sigmoid(_safe(bsi), center=-0.05, slope=25))
-        weights.append(3.0)
-
+    scores, weights = [], []
     if ui is not None:
-        # UI (SWIR2/NIR ratio) — very sensitive to impervious surfaces
-        scores.append(_sigmoid(_safe(ui), center=-0.05, slope=20))
+        # UI is the sharpest discriminator: impervious has SWIR2 > NIR
+        scores.append(_sigmoid(_safe(ui), center=0.0, slope=30))
+        weights.append(4.0)
+    if bsi is not None:
+        scores.append(_sigmoid(_safe(bsi), center=0.04, slope=20))
         weights.append(2.0)
-
     if ndbi is not None:
-        scores.append(_sigmoid(_safe(ndbi), center=-0.05, slope=18))
-        weights.append(1.5)
-
-    if mndwi is not None:
-        # Urban is dry — negative MNDWI, but not as negative as open desert
-        scores.append(_sigmoid(_safe(mndwi), center=-0.1, slope=20,) * 0)  # placeholder
-        # Use as suppressor: high MNDWI = water, not urban
-        scores[-1] = _inv_sigmoid(_safe(mndwi), center=0.0, slope=20)
+        scores.append(_sigmoid(_safe(ndbi), center=0.0, slope=15))
         weights.append(1.0)
-
+    if mndwi is not None:
+        # Urban is dry — suppress if MNDWI positive (water)
+        scores.append(_inv_sigmoid(_safe(mndwi), center=-0.05, slope=20))
+        weights.append(1.0)
     if ndvi is not None:
-        # Urban has NDVI < 0.25 — strong suppression above that
+        # Urban has NDVI < 0.25
         scores.append(_inv_sigmoid(_safe(ndvi), center=0.25, slope=25))
         weights.append(1.5)
-
     if not scores:
         return np.zeros(1)
-
-    weighted_sum = sum(s * w for s, w in zip(scores, weights))
-    return np.clip(weighted_sum / sum(weights), 0, 1)
+    return np.clip(
+        sum(s * w for s, w in zip(scores, weights)) / sum(weights), 0, 1
+    ).astype(np.float32)
 
 
 def barren_score(ndvi, bsi, mndwi, ndbi) -> np.ndarray:
     """
-    High score = bare soil / barren land.
-    Barren differs from urban: lower BSI than impervious, very low NDVI,
-    and more negative MNDWI (drier than urban).
+    Bare soil / barren land: low NDVI, moderate BSI, UI clearly negative
+    (distinguishes from urban), and dry surface (negative MNDWI).
+    CRITICAL: multiplicative MNDWI veto — if MNDWI > 0 the surface is
+    wet/saline (sebkha), not barren. This was causing sebkha misclassification.
     """
-    scores = []
-    weights = []
-
+    scores, weights = [], []
     if ndvi is not None:
-        # Barren = very low NDVI (< 0.1)
-        scores.append(_inv_sigmoid(_safe(ndvi), center=0.08, slope=35))
-        weights.append(2.5)
-
+        # Barren: NDVI < 0.12
+        scores.append(_inv_sigmoid(_safe(ndvi), center=0.12, slope=30))
+        weights.append(3.0)
     if bsi is not None:
-        # Barren soil: BSI around -0.1 to +0.1 (moderate, lower than dense urban)
-        scores.append(_bell(_safe(bsi), center=0.0, width=0.25))
-        weights.append(1.5)
-
+        # Bare soil BSI peaks around 0.03 — bell centred there
+        scores.append(_bell(_safe(bsi), center=0.03, width=0.18))
+        weights.append(2.0)
     if mndwi is not None:
-        # Barren is dry but not spectrally dominated by impervious minerals
-        scores.append(_bell(_safe(mndwi), center=-0.2, width=0.25))
+        # Dry surface: MNDWI around -0.20 for bare soil
+        scores.append(_bell(_safe(mndwi), center=-0.20, width=0.18))
         weights.append(1.0)
-
-    if ndbi is not None:
-        # Barren often has slightly positive NDBI (exposed soil/rock)
-        scores.append(_sigmoid(_safe(ndbi), center=-0.1, slope=15))
-        weights.append(1.0)
-
     if not scores:
         return np.zeros(1)
-
-    return np.clip(
+    base = np.clip(
         sum(s * w for s, w in zip(scores, weights)) / sum(weights), 0, 1
-    ).astype(np.float32)
+    )
+    # MNDWI veto: positive MNDWI = wet/water surface → cannot be barren
+    if mndwi is not None:
+        mndwi_veto = _inv_sigmoid(_safe(mndwi), center=0.0, slope=40)
+        base = base * mndwi_veto
+    return base.astype(np.float32)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -397,7 +363,7 @@ def classify_ensemble(indices: dict) -> np.ndarray:
     savi   = indices.get("savi")
 
     # Compute soft membership for each class
-    w_water = water_score(ndwi, mndwi, ndvi)
+    w_water = water_score(ndwi, mndwi, ndvi, bsi)
     w_veg   = vegetation_score(ndvi, evi2, savi, mndwi, bsi)
     w_urban = urban_score(ndbi, bsi, ui, mndwi, ndvi)
     w_bare  = barren_score(ndvi, bsi, mndwi, ndbi)
