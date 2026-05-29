@@ -6,6 +6,7 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import io, sys, os, tempfile, re
+from datetime import date as _date
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -103,6 +104,35 @@ def save_upload_to_temp(uploaded_file) -> str:
         return tmp.name
 
 
+def _extract_lat_from_meta(meta: dict):
+    """Extract latitude from image_meta transform if available."""
+    try:
+        import rasterio.transform as rt
+        t = meta.get("transform")
+        h = meta.get("height", 100)
+        w = meta.get("width", 100)
+        if t:
+            _, y = rt.xy(t, h // 2, w // 2)
+            return float(y)
+    except Exception:
+        pass
+    return None
+
+def _extract_lon_from_meta(meta: dict):
+    """Extract longitude from image_meta transform if available."""
+    try:
+        import rasterio.transform as rt
+        t = meta.get("transform")
+        h = meta.get("height", 100)
+        w = meta.get("width", 100)
+        if t:
+            x, _ = rt.xy(t, h // 2, w // 2)
+            return float(x)
+    except Exception:
+        pass
+    return None
+
+
 def render_index_map(arr, title, cmap):
     fig, ax = plt.subplots(figsize=(5, 3.5), facecolor="#ffffff")
     ax.set_facecolor("#f8fafc")
@@ -187,16 +217,109 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Input mode ────────────────────────────────────────────────────────────
     st.markdown("### 📡 Image Input")
-    uploaded_t1 = st.file_uploader("Primary image (or earlier date)", type=["tif","tiff","png","jpg"], key="img_t1", help="GeoTIFF preferred.")
-    uploaded_t2 = st.file_uploader("Second image — optional (later date)", type=["tif","tiff","png","jpg"], key="img_t2", help="Upload for temporal NDVI comparison.")
+    input_mode = st.radio(
+        "Source",
+        ["Upload image(s)", "Fetch from GEE"],
+        horizontal=True,
+        help="Upload your own GeoTIFF, or fetch directly from Google Earth Engine."
+    )
 
+    uploaded_t1  = None
+    uploaded_t2  = None
+    gee_params   = None   # dict if GEE mode selected
+
+    if input_mode == "Upload image(s)":
+        uploaded_t1 = st.file_uploader(
+            "Primary image (or earlier date)",
+            type=["tif","tiff","png","jpg"], key="img_t1",
+            help="GeoTIFF preferred — 6-band Sentinel-2 or Landsat recommended."
+        )
+        uploaded_t2 = st.file_uploader(
+            "Second image — optional (later date)",
+            type=["tif","tiff","png","jpg"], key="img_t2",
+            help="Upload for temporal NDVI change detection."
+        )
+        # Acquisition dates (Feature 3)
+        if uploaded_t1 is not None or uploaded_t2 is not None:
+            st.markdown("#### 📅 Acquisition Dates")
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                date_t1 = st.date_input("Image 1", value=None, key="date_t1",
+                                        help="Acquisition date of primary image.")
+            with col_d2:
+                date_t2 = st.date_input("Image 2", value=None, key="date_t2",
+                                        help="Acquisition date of second image.")
+        else:
+            date_t1 = date_t2 = None
+
+    else:  # GEE mode
+        st.markdown("**Location**")
+        col_lat, col_lon = st.columns(2)
+        with col_lat:
+            gee_lat = st.number_input("Latitude",  value=36.45, format="%.4f", key="gee_lat")
+        with col_lon:
+            gee_lon = st.number_input("Longitude", value=10.73, format="%.4f", key="gee_lon")
+
+        st.markdown("**Temporal range**")
+        col_y1, col_y2 = st.columns(2)
+        with col_y1:
+            gee_year1 = st.number_input("Year 1 (earlier)", value=2010,
+                                        min_value=1984, max_value=2024, key="gee_y1")
+        with col_y2:
+            gee_year2 = st.number_input("Year 2 (later)",   value=2024,
+                                        min_value=1984, max_value=2024, key="gee_y2")
+
+        gee_sensor = st.selectbox(
+            "Sensor (auto if blank)",
+            ["Auto", "Sentinel-2 L2A", "Landsat 8/9", "Landsat 5 TM"],
+            key="gee_sensor"
+        )
+        gee_buffer = st.slider("Area radius (km)", 2.0, 20.0, 5.0, 0.5, key="gee_buf")
+
+        gee_params = {
+            "lat": gee_lat, "lon": gee_lon,
+            "year1": int(gee_year1), "year2": int(gee_year2),
+            "sensor": None if gee_sensor == "Auto" else gee_sensor,
+            "buffer_km": gee_buffer,
+        }
+        date_t1 = _date(int(gee_year1), 4, 1)   # approximate acquisition date
+        date_t2 = _date(int(gee_year2), 4, 1)
+
+    # ── Climate data ──────────────────────────────────────────────────────────
+    st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
     st.markdown("### 📊 Climate Data")
-    uploaded_csv = st.file_uploader("Climate data CSV — optional", type=["csv"], key="csv", help="15-year monthly climate data from NASA POWER API.")
+    climate_mode = st.radio(
+        "Source",
+        ["Auto-fetch (NASA POWER)", "Upload CSV"],
+        horizontal=True,
+        help="Auto-fetch pulls 15 years of monthly data from NASA POWER API automatically."
+    )
+    uploaded_csv = None
+    if climate_mode == "Upload CSV":
+        uploaded_csv = st.file_uploader(
+            "NASA POWER CSV",
+            type=["csv"], key="csv",
+            help="15-year monthly climate data exported from NASA POWER."
+        )
 
+    # ── Time series ───────────────────────────────────────────────────────────
+    fetch_timeseries = st.checkbox(
+        "📈 Fetch NDVI time series (GEE required)",
+        value=False,
+        help="Fetch annual NDVI composites for a multi-year trend chart. "
+             "Requires GEE credentials. Adds ~30s to analysis time."
+    )
+
+    # ── Options ───────────────────────────────────────────────────────────────
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
     st.markdown("### ⚙️ Options")
-    user_question = st.text_area("Custom question (optional)", value="Provide a full scientific interpretation of this image and data.", height=80)
+    user_question = st.text_area(
+        "Custom question (optional)",
+        value="Provide a full scientific interpretation of this image and data.",
+        height=80
+    )
     run_btn = st.button("▶ Run Analysis", use_container_width=True)
 
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
@@ -204,7 +327,7 @@ with st.sidebar:
     <div style="font-size:0.68rem;color:#9ca3af;line-height:1.7;">
         Pipeline: Image → ViT → RAG → LLM<br>
         LLM: Groq / llama-3.3-70b-versatile<br>
-        Indices: NDVI · NDWI · NDBI
+        Indices: NDVI · NDWI · NDBI · BSI · UI · MNDWI
     </div>
     """, unsafe_allow_html=True)
 
@@ -233,10 +356,10 @@ if not run_btn:
     """, unsafe_allow_html=True)
     st.stop()
 
-if not uploaded_t1:
+if not uploaded_t1 and not gee_params:
     st.markdown("""
     <div class="geo-card geo-card-error">
-        ⚠️ <strong>No image uploaded.</strong> Please upload at least one satellite image in the sidebar.
+        ⚠️ <strong>No image source.</strong> Upload an image or configure GEE fetch in the sidebar.
     </div>
     """, unsafe_allow_html=True)
     st.stop()
@@ -303,17 +426,56 @@ try:
         except Exception as e:
             import_error_card("geospatial_platform.llm_engine → generate_report", e); st.stop()
 
-        # ── Save uploads to temp files ────────────────────────────────────────
-        st.write("📥 Saving uploaded files…")
-        path_t1 = save_upload_to_temp(uploaded_t1)
-        temp_files.append(path_t1)
+        # ── Feature 1: GEE direct fetch ──────────────────────────────────────
+        path_t1 = path_t2 = path_csv = None
 
-        path_t2 = None
-        if uploaded_t2:
-            path_t2 = save_upload_to_temp(uploaded_t2)
-            temp_files.append(path_t2)
+        if gee_params:
+            st.write("🛰️ Fetching imagery from Google Earth Engine…")
+            try:
+                from gee_connector import init_gee, fetch_and_save, auto_select_sensor
+                if init_gee():
+                    sensor1 = gee_params.get("sensor") or auto_select_sensor(gee_params["year1"])
+                    path_t1 = fetch_and_save(
+                        lat=gee_params["lat"], lon=gee_params["lon"],
+                        year=gee_params["year1"], sensor=sensor1,
+                        buffer_km=gee_params["buffer_km"],
+                    )
+                    if path_t1:
+                        temp_files.append(path_t1)
+                        st.write(f"  ✓ Image 1 ({gee_params['year1']}) fetched from GEE")
+                    else:
+                        st.warning("⚠️ GEE Image 1 fetch failed — check credentials or try uploading manually.")
+                        st.stop()
 
-        path_csv = None
+                    if gee_params["year2"] != gee_params["year1"]:
+                        sensor2 = gee_params.get("sensor") or auto_select_sensor(gee_params["year2"])
+                        path_t2 = fetch_and_save(
+                            lat=gee_params["lat"], lon=gee_params["lon"],
+                            year=gee_params["year2"], sensor=sensor2,
+                            buffer_km=gee_params["buffer_km"],
+                        )
+                        if path_t2:
+                            temp_files.append(path_t2)
+                            st.write(f"  ✓ Image 2 ({gee_params['year2']}) fetched from GEE")
+                        else:
+                            pipeline_warnings.append("GEE Image 2 fetch failed — temporal analysis skipped.")
+                else:
+                    st.error("❌ GEE initialisation failed. Add GEE_SERVICE_ACCOUNT to Streamlit secrets.")
+                    st.stop()
+            except Exception as e:
+                st.error(f"❌ GEE error: {e}")
+                st.stop()
+
+        else:
+            # ── Save uploads to temp files ────────────────────────────────────
+            st.write("📥 Saving uploaded files…")
+            if uploaded_t1:
+                path_t1 = save_upload_to_temp(uploaded_t1)
+                temp_files.append(path_t1)
+            if uploaded_t2:
+                path_t2 = save_upload_to_temp(uploaded_t2)
+                temp_files.append(path_t2)
+
         if uploaded_csv:
             path_csv = save_upload_to_temp(uploaded_csv)
             temp_files.append(path_csv)
@@ -321,6 +483,14 @@ try:
         # ── Step 1 — Input handling ───────────────────────────────────────────
         st.write("📥 Validating inputs and extracting metadata…")
         ic = build_input_context(image_path=path_t1, csv_path=path_csv, question=user_question)
+
+        # ── Feature 3: Acquisition date → seasonal context ───────────────────
+        if date_t1 is not None:
+            ic.acquisition_month = date_t1.month
+            ic.lat = (gee_params["lat"] if gee_params
+                      else getattr(ic, 'lat', None))
+        if date_t2 is not None:
+            ic.acquisition_month_t2 = date_t2.month
 
         # ── Step 1b — Second image ────────────────────────────────────────────
         if path_t2:
@@ -383,19 +553,55 @@ try:
 
         # ── Step 4 — Climate data integration ─────────────────────────────────
         if path_csv:
-            st.write("📊 Integrating NASA POWER climate data…")
-            ic = integrate_data(ic)
-            if build_climate_summary and populate_convenience_fields:
+            st.write("📊 Integrating uploaded climate CSV…")
+            try:
+                ic = integrate_data(ic)
                 df = getattr(ic, 'csv_df', None)
-                if df is None:
-                    df = getattr(ic, 'climate_df', None)
                 if df is not None:
                     ic.climate_summary = build_climate_summary(df)
                     populate_convenience_fields(ic)
                 else:
-                    st.warning("⚠️ Climate DataFrame not found on InputContext after integration.")
+                    pipeline_warnings.append("Climate DataFrame not found after integration.")
+            except Exception as e:
+                pipeline_warnings.append(f"Climate integration failed: {e}")
+
+        elif climate_mode == "Auto-fetch (NASA POWER)":
+            # Feature 4: NASA POWER auto-fetch using geocoded coordinates
+            st.write("🌍 Auto-fetching climate data from NASA POWER…")
+            try:
+                from climate_fetcher import fetch_nasa_power, climate_data_quality_report
+                fetch_lat = (gee_params["lat"] if gee_params
+                             else _extract_lat_from_meta(ic.image_meta))
+                fetch_lon = (gee_params["lon"] if gee_params
+                             else _extract_lon_from_meta(ic.image_meta))
+                if fetch_lat is not None and fetch_lon is not None:
+                    climate_df = fetch_nasa_power(fetch_lat, fetch_lon)
+                    if climate_df is not None:
+                        qr = climate_data_quality_report(climate_df)
+                        if not qr["suitable"]:
+                            pipeline_warnings.append(
+                                f"NASA POWER data quality: {qr['n_years']} years, "
+                                f"{qr['missing_rain']} missing rainfall months."
+                            )
+                        ic.csv_df = climate_df
+                        ic = integrate_data(ic)
+                        ic.climate_summary = build_climate_summary(ic.csv_df)
+                        populate_convenience_fields(ic)
+                        st.write(f"  ✓ {qr['n_years']} years of climate data fetched automatically")
+                    else:
+                        pipeline_warnings.append(
+                            "NASA POWER returned no data for these coordinates — "
+                            "try uploading a CSV manually."
+                        )
+                else:
+                    pipeline_warnings.append(
+                        "Could not determine coordinates for NASA POWER fetch. "
+                        "Upload a climate CSV manually."
+                    )
+            except Exception as e:
+                pipeline_warnings.append(f"NASA POWER auto-fetch failed: {e}")
         else:
-            st.write("📊 No climate CSV — skipping.")
+            st.write("📊 No climate data — skipping.")
 
         # ── Step 5 — RAG ──────────────────────────────────────────────────────
         st.write("📚 Retrieving environmental context (RAG)…")
@@ -403,6 +609,44 @@ try:
         # Normalise RAG field name — support both ic.rag_context and ic.retrieved_context
         if not getattr(ic, 'rag_context', None):
             ic.rag_context = getattr(ic, 'retrieved_context', '') or ''
+
+        # ── Feature 5: Multi-year NDVI time series ───────────────────────────
+        ic.ndvi_timeseries  = None
+        ic.ndvi_trend_stats = None
+        if fetch_timeseries:
+            st.write("📈 Fetching NDVI time series from GEE…")
+            try:
+                from time_series import (
+                    fetch_ndvi_time_series, compute_trend,
+                    estimate_growing_season_months
+                )
+                from gee_connector import init_gee
+                if init_gee():
+                    ts_lat = (gee_params["lat"] if gee_params
+                              else _extract_lat_from_meta(ic.image_meta))
+                    ts_lon = (gee_params["lon"] if gee_params
+                              else _extract_lon_from_meta(ic.image_meta))
+                    if ts_lat and ts_lon:
+                        m_start, m_end = estimate_growing_season_months(
+                            ts_lat, ic.aridity_index
+                        )
+                        ts_df = fetch_ndvi_time_series(
+                            ts_lat, ts_lon,
+                            start_year=2010, end_year=2024,
+                            month_start=m_start, month_end=m_end,
+                        )
+                        if ts_df is not None:
+                            ic.ndvi_timeseries  = ts_df
+                            ic.ndvi_trend_stats = compute_trend(ts_df)
+                            st.write(f"  ✓ {len(ts_df)} years of NDVI data fetched")
+                        else:
+                            pipeline_warnings.append("NDVI time series fetch returned no data.")
+                    else:
+                        pipeline_warnings.append("Coordinates not available for time series fetch.")
+                else:
+                    pipeline_warnings.append("GEE not initialised — time series skipped.")
+            except Exception as e:
+                pipeline_warnings.append(f"Time series fetch failed: {e}")
 
         # ── Patch derived fields before report generation ─────────────────────
         # Ensure mean index values exist (image_processor may store as ic.ndvi, not ic.ndvi_mean)
@@ -635,6 +879,47 @@ with tab_maps:
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+    # ── Feature 2: ΔNDVI Change Detection Map ────────────────────────────────
+    delta_map = getattr(ic, 'ndvi_trend_map', None)
+    if delta_map is not None:
+        st.markdown("## ΔNDVI Spatial Change Map")
+        st.markdown("""
+        <div style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">
+            Green = vegetation gain · Red = vegetation loss · Grey = no change
+        </div>""", unsafe_allow_html=True)
+        fig_delta = render_index_map(delta_map, "ΔNDVI Change Map (pixel-wise)", "RdYlGn")
+        st.pyplot(fig_delta, use_container_width=True)
+        plt.close(fig_delta)
+
+    # ── Feature 5: Multi-year NDVI Time Series ───────────────────────────────
+    ts_df    = getattr(ic, 'ndvi_timeseries', None)
+    ts_trend = getattr(ic, 'ndvi_trend_stats', None)
+    if ts_df is not None and len(ts_df) > 1:
+        st.markdown("## NDVI Time Series (Annual)")
+        try:
+            from time_series import render_time_series_chart
+            fig_ts = render_time_series_chart(
+                ts_df, ts_trend or {},
+                ecosystem=getattr(ic, 'ecosystem', '') or ''
+            )
+            st.pyplot(fig_ts, use_container_width=True)
+            plt.close(fig_ts)
+
+            # Summary stats below chart
+            if ts_trend:
+                trend_color = "#16a34a" if (ts_trend.get("slope") or 0) > 0 else "#dc2626"
+                st.markdown(f"""
+                <div class="metric-row">
+                    <div class="metric-chip">Trend<span>{ts_trend.get('trend','—')}</span></div>
+                    <div class="metric-chip">Rate<span style="color:{trend_color}">
+                        {ts_trend.get('annual_rate',0):+.4f}/yr</span></div>
+                    <div class="metric-chip">Total Δ<span style="color:{trend_color}">
+                        {ts_trend.get('total_change',0):+.3f}</span></div>
+                    <div class="metric-chip">R²<span>{ts_trend.get('r2',0):.2f}</span></div>
+                </div>""", unsafe_allow_html=True)
+        except Exception as e:
+            st.caption(f"Time series chart error: {e}")
 
 
 # ── TAB 3 — FULL REPORT ──────────────────────────────────────────────────────
