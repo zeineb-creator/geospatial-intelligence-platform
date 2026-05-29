@@ -658,6 +658,7 @@ def build_interpretation_facts(ic, kb: dict) -> str:
 
 def detect_contradictions(ctx: dict, kb: dict = None) -> list:
     contradictions = []
+
     aridity    = ctx.get("aridity_index")
     humidity   = ctx.get("humidity_pct")
     rf_trend   = ctx.get("rainfall_trend", "")
@@ -668,65 +669,37 @@ def detect_contradictions(ctx: dict, kb: dict = None) -> list:
     barren_pct = ctx.get("barren_pct", 0) or 0
     veg_pct    = ctx.get("veg_pct", 0) or 0
 
-    # 1. Aridity vs humidity (universal)
-    if aridity is not None and aridity < 0.5 and humidity is not None and humidity > 65:
-        facts.append = None  # don't double-inject — handled in facts block
-
-    # 2. High water fraction + negative NDWI (universal)
+    # 1. High water + negative NDWI
     if water_pct > 15 and ndwi < 0.0:
         contradictions.append(
-            f"Water fraction ({water_pct:.1f}%) is high but NDWI ({ndwi:.3f}) is negative. "
-            "Physically: saline, turbid, or mineral-rich water bodies suppress NDWI via "
-            "elevated SWIR reflectance. This is NOT a classification error — it is the "
-            "spectral fingerprint of a spectrally mixed water surface. "
-            "The spatial extent is real; the NDWI suppression is a sensor physics effect."
+            f"Water fraction ({water_pct:.1f}%) is high but NDWI ({ndwi:.3f}) is negative..."
         )
 
-    # 3. High NDVI + high aridity (any arid ecosystem)
-    if (aridity is not None and aridity < 0.3 and
-            ndvi is not None and ndvi > 0.40):
+    # 2. High NDVI + high aridity
+    if (aridity is not None and aridity < 0.3 and ndvi is not None and ndvi > 0.40):
         contradictions.append(
-            f"NDVI ({ndvi:.3f}) is moderately high despite an Arid/Semi-arid classification "
-            f"(AI = {aridity:.3f}). Possible explanations: "
-            "(a) image acquired during or immediately after wet season, "
-            "(b) irrigated agriculture present, "
-            "(c) the aridity index underestimates local moisture availability "
-            "due to groundwater, river influence, or fog."
+            f"NDVI ({ndvi:.3f}) is high despite arid conditions..."
         )
 
-    # 4. High urban + high vegetation (unusual co-occurrence)
+    # 3. Urban + vegetation overlap
     if urban_pct > 25 and veg_pct > 50:
         contradictions.append(
-            f"Urban fraction ({urban_pct:.1f}%) and vegetation fraction ({veg_pct:.1f}%) "
-            "are both elevated — unusual co-occurrence. "
-            "Possible explanation: highly vegetated urban zone (parks, tree-lined streets, "
-            "urban forest), or classifier overlap at the urban-vegetation boundary. "
-            "Treat both fractions as upper-bound estimates."
+            f"Urban fraction ({urban_pct:.1f}%) and vegetation fraction ({veg_pct:.1f}%) are both high..."
         )
 
-    # 5. Increasing rainfall + decreasing aridity class still arid
+    # 4. Rainfall trend vs aridity
     if aridity is not None and aridity < 0.3 and "increasing" in rf_trend:
         contradictions.append(
-            f"Rainfall trend is increasing yet aridity index ({aridity:.3f}) remains in the "
-            "Arid/Semi-arid class. This is physically consistent: the aridity index integrates "
-            "multi-decadal P/PET; a short-term rainfall increase does not shift the long-term "
-            "water balance classification. Monitor for aridity index change over 10+ year periods."
+            "Rainfall trend is increasing but aridity remains low..."
         )
 
-    # 6. Zero barren in an arid ecosystem (impossible in true deserts)
+    # 5. Barren anomaly
     if (kb and aridity is not None and aridity < 0.3 and barren_pct < 5):
-        b_lo = kb.get("barren_expected", (20, 80))[0]
-        if b_lo > 10:
-            contradictions.append(
-                f"Barren fraction ({barren_pct:.1f}%) is near-zero in what aridity data "
-                f"classifies as an arid zone (AI = {aridity:.3f}). "
-                "This suggests either: (a) wet-season acquisition with temporary vegetation flush, "
-                "(b) irrigated agriculture masking the background arid signal, or "
-                "(c) classifier over-assignment to vegetation/urban at the expense of bare soil."
-            )
+        contradictions.append(
+            f"Barren fraction ({barren_pct:.1f}%) is unusually low for arid zone..."
+        )
 
     return contradictions
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PROMPT BUILDER
