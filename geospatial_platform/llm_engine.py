@@ -327,6 +327,97 @@ def get_ecosystem_kb(ecosystem: str) -> dict:
             return val
     return ECOSYSTEM_KB["mixed / unclassified landscape"]
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SEASONAL CONTEXT (Feature 3)
+# Derives whether the image NDVI is above/below seasonal norm
+# using acquisition month + hemisphere + ecosystem type.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Monthly NDVI seasonal multipliers per climate zone (relative to annual mean = 1.0)
+# Northern hemisphere baseline; southern hemisphere seasons are inverted
+SEASONAL_NDVI_PROFILE = {
+    "arid":           {1:1.2, 2:1.3, 3:1.2, 4:1.0, 5:0.8, 6:0.6,
+                       7:0.5, 8:0.5, 9:0.6, 10:0.8, 11:1.0, 12:1.1},
+    "mediterranean":  {1:0.9, 2:1.1, 3:1.3, 4:1.3, 5:1.1, 6:0.8,
+                       7:0.6, 8:0.6, 9:0.7, 10:0.9, 11:1.0, 12:0.9},
+    "tropical":       {1:1.0, 2:1.0, 3:1.0, 4:1.0, 5:1.0, 6:1.0,
+                       7:1.0, 8:1.0, 9:1.0, 10:1.0, 11:1.0, 12:1.0},
+    "temperate":      {1:0.5, 2:0.5, 3:0.7, 4:0.9, 5:1.1, 6:1.3,
+                       7:1.3, 8:1.2, 9:1.0, 10:0.8, 11:0.6, 12:0.5},
+    "savanna":        {1:0.7, 2:0.8, 3:0.9, 4:1.0, 5:1.1, 6:1.2,
+                       7:1.2, 8:1.1, 9:1.0, 10:0.9, 11:0.8, 12:0.7},
+}
+
+def _get_climate_zone(ecosystem: str) -> str:
+    """Map ecosystem string to a seasonal profile key."""
+    eco = (ecosystem or "").lower()
+    if any(w in eco for w in ["arid", "desert", "hyper"]):     return "arid"
+    if any(w in eco for w in ["mediterranean", "semi-arid"]):  return "mediterranean"
+    if any(w in eco for w in ["tropical", "forest", "aquatic"]): return "tropical"
+    if any(w in eco for w in ["temperate", "humid", "urban"]): return "temperate"
+    if any(w in eco for w in ["savanna", "grassland", "agricultural"]): return "savanna"
+    return "mediterranean"  # default for unclassified
+
+
+def compute_seasonal_context(
+    ndvi_measured: float,
+    acquisition_month: int,
+    lat: float,
+    ecosystem: str,
+    kb: dict,
+) -> str:
+    """
+    Returns a pre-computed statement about whether the measured NDVI
+    is above/below the expected seasonal norm for that month.
+    Works for any ecosystem and both hemispheres.
+    """
+    if ndvi_measured is None or acquisition_month is None:
+        return ""
+
+    # Southern hemisphere: invert month
+    effective_month = acquisition_month
+    if lat is not None and lat < -15:
+        effective_month = ((acquisition_month + 5) % 12) + 1
+
+    zone    = _get_climate_zone(ecosystem)
+    profile = SEASONAL_NDVI_PROFILE.get(zone, SEASONAL_NDVI_PROFILE["mediterranean"])
+
+    # Expected NDVI = annual mean × seasonal multiplier
+    ndvi_lo, ndvi_hi = kb.get("ndvi_range", (0.1, 0.5))
+    ndvi_annual_mean = (ndvi_lo + ndvi_hi) / 2
+    multiplier       = profile.get(effective_month, 1.0)
+    ndvi_expected    = ndvi_annual_mean * multiplier
+
+    deviation  = ndvi_measured - ndvi_expected
+    noise      = kb.get("ndvi_noise", 0.05)
+    month_name = ["Jan","Feb","Mar","Apr","May","Jun",
+                  "Jul","Aug","Sep","Oct","Nov","Dec"][acquisition_month - 1]
+    season_str = "peak growing season" if multiplier >= 1.2 else \
+                 "shoulder season" if multiplier >= 0.9 else "dry/dormant season"
+
+    if abs(deviation) < noise:
+        return (
+            f"NDVI measured in {month_name} ({season_str} for {zone} ecosystems) is "
+            f"within the expected seasonal range — no anomaly relative to the "
+            f"typical {month_name} baseline."
+        )
+    elif deviation > 0:
+        return (
+            f"NDVI measured in {month_name} is {deviation:.3f} ABOVE the expected "
+            f"seasonal norm for {month_name} in a {zone} ecosystem — indicating "
+            f"above-average greenness for this time of year, consistent with "
+            f"a wet year, recent rainfall event, or multi-year vegetation recovery."
+        )
+    else:
+        return (
+            f"NDVI measured in {month_name} is {abs(deviation):.3f} BELOW the expected "
+            f"seasonal norm for {month_name} in a {zone} ecosystem — indicating "
+            f"below-average greenness, consistent with drought stress, delayed "
+            f"growing season onset, or vegetation degradation."
+        )
+
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INDEX INTERPRETERS (global, no hardcoded region)
@@ -542,6 +633,17 @@ def build_interpretation_facts(ic, kb: dict) -> str:
                 f"Monthly rainfall values are unreliable indicators of annual water availability. "
                 f"Interpret only multi-month or annual rainfall totals."
             )
+
+    # ── Seasonal context ─────────────────────────────────────────────────────
+    # Injected if acquisition month is available on context
+    acq_month = getattr(ic, 'acquisition_month', None)
+    lat       = getattr(ic, 'lat', None)
+    if acq_month and ic.ndvi_mean is not None and kb:
+        seasonal_stmt = compute_seasonal_context(
+            ic.ndvi_mean, acq_month, lat, ic.ecosystem or "", kb
+        )
+        if seasonal_stmt:
+            facts.append(seasonal_stmt)
 
     if not facts:
         return "No ecosystem-specific pre-computed facts available."
