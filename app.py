@@ -1,9 +1,4 @@
 
-```python
-"""
-app.py — Multimodal Geospatial Intelligence Platform
-"""
-
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
