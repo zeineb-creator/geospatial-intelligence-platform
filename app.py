@@ -1,3 +1,6 @@
+Here is the complete `app.py` with the GEE debug section added:
+
+```python
 """
 app.py — Multimodal Geospatial Intelligence Platform
 """
@@ -414,87 +417,154 @@ try:
 
         # ── GEE fetch ─────────────────────────────────────────────────────────
         path_t1 = path_t2 = path_csv = None
-        
-        # In app.py, replace the GEE fetch section with:
-        
+
         if gee_params:
             st.write("🛰️ Fetching imagery from Google Earth Engine…")
             try:
                 from gee_connector import (
-                    init_gee, fetch_image_as_array, fetch_preview_only,
-                    auto_sensor, SENSOR_CONFIGS
+                    init_gee, fetch_image_as_array, fetch_and_save,
+                    auto_select_sensor, SENSOR_CONFIGS
                 )
-                
-                if init_gee():
-                    st.write("✅ GEE initialized")
-                    
-                    # First check if there are scenes
-                    from gee_connector import get_best_image
-                    sensor1 = gee_params.get("sensor") or auto_sensor(gee_params["year1"])
-                    
-                    st.write(f"Checking for scenes: {sensor1} at {gee_params['year1']}")
-                    
-                    # Quick preview (no download, just check availability)
-                    preview_url, preview_meta = fetch_preview_only(
-                        lat=gee_params["lat"],
-                        lon=gee_params["lon"],
-                        year=gee_params["year1"],
-                        sensor=sensor1,
-                        buffer_km=gee_params["buffer_km"],
-                    )
-                    
-                    if preview_url is None:
-                        st.error("❌ No satellite scenes found for these coordinates and year.")
+
+                # ── DEBUG: surface GEE secrets in UI ──────────────────────────
+                st.write("🔍 Checking GEE secrets…")
+                try:
+                    sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
+                    if sa_info is None:
+                        st.error("❌ GEE_SERVICE_ACCOUNT section not found in Streamlit secrets.")
                         st.stop()
-                    
-                    st.write(f"  ✓ Found scenes for Year 1")
-                    
-                    # Now download the actual data for processing
-                    st.write(f"  Downloading image data for {gee_params['year1']}...")
-                    result = fetch_image_as_array(
-                        lat=gee_params["lat"],
-                        lon=gee_params["lon"],
-                        year=gee_params["year1"],
-                        sensor=sensor1,
-                        buffer_km=gee_params["buffer_km"],
-                    )
-                    
-                    if result:
-                        array_t1, meta_t1 = result
-                        path_t1 = tempfile.NamedTemporaryFile(delete=False, suffix=".tif").name
-                        from gee_connector import save_array_to_geotiff
-                        path_t1 = save_array_to_geotiff(array_t1, meta_t1, path_t1)
-                        temp_files.append(path_t1)
-                        st.write(f"  ✓ Image 1 ({gee_params['year1']}) downloaded")
                     else:
-                        st.error("❌ Failed to download image data")
-                        st.stop()
-                    
-                    # Fetch second year if different
-                    if gee_params["year2"] != gee_params["year1"]:
-                        sensor2 = gee_params.get("sensor") or auto_sensor(gee_params["year2"])
-                        st.write(f"  Checking Year 2 ({gee_params['year2']})...")
-                        
-                        result2 = fetch_image_as_array(
-                            lat=gee_params["lat"],
-                            lon=gee_params["lon"],
-                            year=gee_params["year2"],
-                            sensor=sensor2,
-                            buffer_km=gee_params["buffer_km"],
-                        )
-                        
-                        if result2:
-                            array_t2, meta_t2 = result2
-                            path_t2 = tempfile.NamedTemporaryFile(delete=False, suffix=".tif").name
-                            path_t2 = save_array_to_geotiff(array_t2, meta_t2, path_t2)
-                            temp_files.append(path_t2)
-                            st.write(f"  ✓ Image 2 ({gee_params['year2']}) downloaded")
-                        else:
-                            st.warning("⚠️ Could not fetch second year image")
-                else:
-                    st.error("❌ GEE initialisation failed")
+                        keys_present = list(sa_info.keys())
+                        st.write(f"  Secret keys found: `{keys_present}`")
+                        st.write(f"  client_email: `{sa_info.get('client_email', 'MISSING')}`")
+                        st.write(f"  project_id:   `{sa_info.get('project_id', 'MISSING')}`")
+                        st.write(f"  private_key_id: `{sa_info.get('private_key_id', 'MISSING')}`")
+                        raw_key = sa_info.get("private_key", "")
+                        st.write(f"  private_key length: `{len(raw_key)}` chars")
+                        st.write(f"  private_key starts with: `{raw_key[:50]!r}`")
+                        st.write(f"  private_key ends with:   `{raw_key[-30:]!r}`")
+                        has_header = "BEGIN PRIVATE KEY" in raw_key
+                        has_literal_n = "\\n" in raw_key
+                        has_real_n = "\n" in raw_key
+                        st.write(f"  Has 'BEGIN PRIVATE KEY': `{has_header}`")
+                        st.write(f"  Has literal \\\\n: `{has_literal_n}`")
+                        st.write(f"  Has real newline: `{has_real_n}`")
+                        if not has_header:
+                            st.error("❌ private_key is malformed — missing 'BEGIN PRIVATE KEY'")
+                            st.stop()
+                except Exception as debug_e:
+                    st.error(f"❌ Secret inspection failed: {debug_e}")
                     st.stop()
-                    
+
+                # ── Attempt GEE init ──────────────────────────────────────────
+                st.write("🔐 Initialising GEE…")
+                gee_ok = False
+                try:
+                    gee_ok = init_gee()
+                except Exception as init_e:
+                    import traceback
+                    st.error(f"❌ init_gee() raised an exception: {init_e}")
+                    st.code(traceback.format_exc())
+                    st.stop()
+
+                if not gee_ok:
+                    st.error(
+                        "❌ GEE initialisation failed. "
+                        "Check Streamlit Cloud logs (Manage app → Logs) "
+                        "for [GEE] print statements showing the exact error."
+                    )
+                    st.info(
+                        "Common causes:\n"
+                        "1. `private_key` has wrong newline format (needs `\\n` not real newlines)\n"
+                        "2. `private_key_id` is missing or wrong\n"
+                        "3. Earth Engine API not enabled in Google Cloud project\n"
+                        "4. Service account doesn't have Earth Engine access\n"
+                        "5. New key not yet propagated (wait 1–2 min and retry)"
+                    )
+                    st.stop()
+
+                st.write("✅ GEE initialized")
+
+                sensor1 = gee_params.get("sensor") or auto_select_sensor(gee_params["year1"])
+                st.write(
+                    f"Sensor: `{sensor1}` | Year: `{gee_params['year1']}` | "
+                    f"Lat: `{gee_params['lat']:.4f}` | Lon: `{gee_params['lon']:.4f}`"
+                )
+
+                # ── Scene count check ─────────────────────────────────────────
+                try:
+                    import ee
+                    point = ee.Geometry.Point([gee_params["lon"], gee_params["lat"]])
+                    aoi   = point.buffer(gee_params["buffer_km"] * 1000).bounds()
+                    cfg   = SENSOR_CONFIGS[sensor1]
+                    col   = (
+                        ee.ImageCollection(cfg["collection"])
+                        .filterBounds(aoi)
+                        .filterDate(
+                            f"{gee_params['year1']}-01-01",
+                            f"{gee_params['year1']}-12-31",
+                        )
+                        .filter(ee.Filter.lt(cfg["cloud_prop"], 80))
+                    )
+                    count = col.size().getInfo()
+                    st.write(f"📡 Scenes available for Year 1 (cloud < 80%): `{count}`")
+                    if count == 0:
+                        st.error(
+                            "❌ No satellite scenes found. "
+                            "Try a different year or larger buffer radius."
+                        )
+                        st.stop()
+                except Exception as scene_e:
+                    st.warning(f"Scene count check failed (non-fatal): {scene_e}")
+
+                # ── Fetch image 1 ─────────────────────────────────────────────
+                st.write(f"  Downloading image data for `{gee_params['year1']}`…")
+                result1 = fetch_image_as_array(
+                    lat=gee_params["lat"],
+                    lon=gee_params["lon"],
+                    year=gee_params["year1"],
+                    sensor=sensor1,
+                    buffer_km=gee_params["buffer_km"],
+                )
+
+                if result1 is None:
+                    st.error(
+                        "❌ GEE image download failed. "
+                        "Check Streamlit Cloud logs for [GEE] traceback."
+                    )
+                    st.stop()
+
+                array_t1, meta_t1 = result1
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
+                    path_t1 = tmp.name
+                from gee_connector import save_array_as_geotiff
+                path_t1 = save_array_as_geotiff(array_t1, meta_t1, path_t1)
+                temp_files.append(path_t1)
+                st.write(f"  ✓ Image 1 (`{gee_params['year1']}`) downloaded — shape: `{array_t1.shape}`")
+
+                # ── Fetch image 2 ─────────────────────────────────────────────
+                if gee_params["year2"] != gee_params["year1"]:
+                    sensor2 = gee_params.get("sensor") or auto_select_sensor(gee_params["year2"])
+                    st.write(f"  Downloading image data for `{gee_params['year2']}`…")
+                    result2 = fetch_image_as_array(
+                        lat=gee_params["lat"],
+                        lon=gee_params["lon"],
+                        year=gee_params["year2"],
+                        sensor=sensor2,
+                        buffer_km=gee_params["buffer_km"],
+                    )
+                    if result2 is not None:
+                        array_t2, meta_t2 = result2
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
+                            path_t2 = tmp.name
+                        path_t2 = save_array_as_geotiff(array_t2, meta_t2, path_t2)
+                        temp_files.append(path_t2)
+                        st.write(f"  ✓ Image 2 (`{gee_params['year2']}`) downloaded — shape: `{array_t2.shape}`")
+                    else:
+                        pipeline_warnings.append(
+                            f"GEE Image 2 ({gee_params['year2']}) fetch failed — temporal analysis skipped."
+                        )
+
             except Exception as e:
                 import traceback
                 st.error(f"❌ GEE error: {e}")
@@ -722,7 +792,6 @@ try:
 
     status.update(label="✅ Analysis complete", state="complete", expanded=False)
 
-    # Show pipeline warnings
     for w in pipeline_warnings:
         st.warning(w)
 
@@ -994,3 +1063,4 @@ with tab_report:
                 file_name=f"geointel_{region_str.replace(' ', '_').replace(',', '')}.txt",
                 mime="text/plain",
             )
+```
