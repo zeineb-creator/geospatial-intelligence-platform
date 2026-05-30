@@ -22,7 +22,6 @@ def init_gee() -> bool:
 
     try:
         import streamlit as st
-
         sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
         if not sa_info:
             print("[GEE] No GEE_SERVICE_ACCOUNT in secrets")
@@ -45,7 +44,7 @@ def init_gee() -> bool:
             email=sa_dict["client_email"],
             key_data=json.dumps(sa_dict),
         )
-        ee.Initialize(credentials)
+        ee.Initialize(credentials, project=sa_dict["project_id"])
         print("[GEE] Initialized via Streamlit service account")
         return True
 
@@ -64,7 +63,6 @@ def init_gee() -> bool:
 
 
 def gee_available() -> bool:
-    """Quick check without reinitializing."""
     try:
         import ee
         ee.Number(1).getInfo()
@@ -79,30 +77,30 @@ def gee_available() -> bool:
 
 SENSOR_CONFIGS = {
     "Sentinel-2 L2A": {
-        "collection": "COPERNICUS/S2_SR_HARMONIZED",
-        "bands": ["B2", "B3", "B4", "B8", "B11", "B12"],
+        "collection":  "COPERNICUS/S2_SR_HARMONIZED",
+        "bands":       ["B2", "B3", "B4", "B8", "B11", "B12"],
         "scale_factor": 0.0001,
-        "resolution": 10,
-        "cloud_prop": "CLOUDY_PIXEL_PERCENTAGE",
-        "cloud_max": 30,
+        "resolution":  10,
+        "cloud_prop":  "CLOUDY_PIXEL_PERCENTAGE",
+        "cloud_max":   30,
     },
     "Landsat 8/9": {
-        "collection": "LANDSAT/LC08/C02/T1_L2",   # ← LC08 not LC09
-        "bands": ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"],
+        "collection":  "LANDSAT/LC08/C02/T1_L2",
+        "bands":       ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"],
         "scale_factor": 0.0000275,
-        "offset": -0.2,
-        "resolution": 30,
-        "cloud_prop": "CLOUD_COVER",
-        "cloud_max": 30,                            # ← raised from 20
+        "offset":      -0.2,
+        "resolution":  30,
+        "cloud_prop":  "CLOUD_COVER",
+        "cloud_max":   30,
     },
     "Landsat 5 TM": {
-        "collection": "LANDSAT/LT05/C02/T1_L2",
-        "bands": ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"],
+        "collection":  "LANDSAT/LT05/C02/T1_L2",
+        "bands":       ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"],
         "scale_factor": 0.0000275,
-        "offset": -0.2,
-        "resolution": 30,
-        "cloud_prop": "CLOUD_COVER",
-        "cloud_max": 30,                            # ← raised from 20
+        "offset":      -0.2,
+        "resolution":  30,
+        "cloud_prop":  "CLOUD_COVER",
+        "cloud_max":   30,
     },
 }
 
@@ -111,7 +109,7 @@ def auto_select_sensor(year: int) -> str:
     if year >= 2017:
         return "Sentinel-2 L2A"
     elif year >= 2013:
-        return "Landsat 8/9"    # now correctly uses LC08
+        return "Landsat 8/9"
     else:
         return "Landsat 5 TM"
 
@@ -135,12 +133,12 @@ def fetch_image_as_array(
         return None
 
     sensor = sensor or auto_select_sensor(year)
-    cfg = SENSOR_CONFIGS[sensor]
+    cfg    = SENSOR_CONFIGS[sensor]
 
     print(f"[GEE] Fetching {sensor} {year}")
 
     point = ee.Geometry.Point([lon, lat])
-    aoi = point.buffer(buffer_km * 1000).bounds()
+    aoi   = point.buffer(buffer_km * 1000).bounds()
 
     start = f"{year}-{month_start:02d}-01"
     end   = f"{year}-{month_end:02d}-28"
@@ -156,28 +154,48 @@ def fetch_image_as_array(
     count = col.size().getInfo()
     print(f"[GEE] Scenes found: {count}")
     if count == 0:
-        print("[GEE] No scenes found — try relaxing cloud cover or date range")
+        print("[GEE] No scenes found")
         return None
 
+    # Build composite and apply scaling
     image = col.median().multiply(cfg["scale_factor"])
     if "offset" in cfg:
         image = image.add(cfg["offset"])
     image = image.clip(aoi)
 
+    # ── Download via getDownloadURL with increased scale to stay under size limit
     try:
         import requests, zipfile, io, rasterio, os
 
-        url = image.getDownloadURL({
-            "scale":  cfg["resolution"],
-            "region": aoi.getInfo(),
-            "format": "GEO_TIFF",
-            "bands":  cfg["bands"],
-        })
+        # Use coarser resolution to avoid the zip size limit
+        # Sentinel-2: use 60m instead of 10m; Landsat: use 60m instead of 30m
+        download_scale = max(cfg["resolution"], 60)
 
-        print(f"[GEE] Downloading from URL...")
-        r = requests.get(url, timeout=180)
-        r.raise_for_status()
-        print(f"[GEE] Download complete — {len(r.content) / 1024:.1f} KB")
+        params = {
+            "scale":       download_scale,
+            "region":      aoi.getInfo(),
+            "format":      "GEO_TIFF",
+            "bands":       cfg["bands"],
+            "crs":         "EPSG:4326",
+        }
+
+        print(f"[GEE] Requesting download at {download_scale}m resolution...")
+        url = image.getDownloadURL(params)
+        print(f"[GEE] Download URL obtained, fetching...")
+
+        r = requests.get(url, timeout=300)
+
+        # Check if response is actually a zip
+        if r.status_code != 200:
+            print(f"[GEE] HTTP error: {r.status_code} — {r.text[:500]}")
+            return None
+
+        content_type = r.headers.get("Content-Type", "")
+        print(f"[GEE] Response: {r.status_code}, size={len(r.content)/1024:.1f}KB, type={content_type}")
+
+        if "zip" not in content_type and not r.content[:2] == b'PK':
+            print(f"[GEE] Not a zip file. Response preview: {r.content[:500]}")
+            return None
 
         bands = []
         with zipfile.ZipFile(io.BytesIO(r.content)) as z:
@@ -185,7 +203,6 @@ def fetch_image_as_array(
             print(f"[GEE] ZIP contains: {tif_names}")
 
             for name in tif_names:
-                # Write to real temp file — rasterio needs seekable file on disk
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
                     tmp.write(z.read(name))
                     tmp_path = tmp.name
@@ -205,14 +222,14 @@ def fetch_image_as_array(
         array = np.stack(bands, axis=0)
         array = np.clip(array, 0, 1)
 
-        meta = {
-            "sensor": sensor,
-            "year":   year,
-            "source": "GEE",
-        }
-
+        meta = {"sensor": sensor, "year": year, "source": "GEE"}
         print(f"[GEE] Success — array shape: {array.shape}")
         return array, meta
+
+    except zipfile.BadZipFile:
+        print(f"[GEE] BadZipFile — response was not a zip. Likely a GEE size/quota error.")
+        print(f"[GEE] Response content preview: {r.content[:500]}")
+        return None
 
     except Exception as e:
         print(f"[GEE] Download error: {e}")
@@ -228,7 +245,6 @@ def fetch_image_as_array(
 def save_array_as_geotiff(array: np.ndarray, meta: dict, output_path: str):
     try:
         import rasterio
-        from rasterio.transform import from_bounds
 
         with rasterio.open(
             output_path,
