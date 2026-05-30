@@ -28,7 +28,7 @@ def init_gee() -> bool:
         if sa_info:
             import json
             credentials = ee.ServiceAccountCredentials(
-                email=sa_info["client_email"],        # ✅ fix
+                email=sa_info["streamlit-gee@capstone26-497821.iam.gserviceaccount.com"],       
                 key_data=json.dumps(dict(sa_info)),   # ✅ fix
             )
             ee.Initialize(credentials)
