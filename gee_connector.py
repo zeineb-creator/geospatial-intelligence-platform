@@ -20,8 +20,8 @@ import os
 
 def init_gee():
     import ee
+    import streamlit as st
 
-    # 1. Try default (rarely works on Streamlit)
     try:
         ee.Initialize()
         print("[GEE] Default init OK")
@@ -29,12 +29,12 @@ def init_gee():
     except Exception as e:
         print("[GEE] Default init failed:", e)
 
-    # 2. Streamlit secrets (MAIN METHOD)
     try:
-        import streamlit as st
-        from oauth2client.service_account import ServiceAccountCredentials
-
         sa = st.secrets["GEE_SERVICE_ACCOUNT"]
+        print("[GEE] Secrets loaded OK")
+        print("[GEE] client_email =", sa.get("client_email"))
+
+        from oauth2client.service_account import ServiceAccountCredentials
 
         credentials = ServiceAccountCredentials(
             sa["client_email"],
@@ -42,16 +42,13 @@ def init_gee():
         )
 
         ee.Initialize(credentials)
-
         print("[GEE] Service account init OK")
         return True
 
     except Exception as e:
         print("[GEE] Service account init failed:", e)
 
-    print("[GEE] ❌ INIT FAILED")
     return False
-
 
 def gee_available():
     """Check if GEE is available."""
