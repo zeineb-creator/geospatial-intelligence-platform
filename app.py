@@ -435,21 +435,22 @@ try:
                         point = ee.Geometry.Point([gee_params["lon"], gee_params["lat"]])
                         aoi   = point.buffer(gee_params["buffer_km"] * 1000).bounds()
                         cfg   = SENSOR_CONFIGS[sensor1]
-                        col   = (
+                        # Scene count check — use full year and relaxed cloud cover
+                        col = (
                             ee.ImageCollection(cfg["collection"])
                             .filterBounds(aoi)
                             .filterDate(
                                 f"{gee_params['year1']}-01-01",
-                                f"{gee_params['year1']}-12-28"
+                                f"{gee_params['year1']}-12-31"
                             )
-                            .filter(ee.Filter.lt(cfg["cloud_prop"], cfg["cloud_max"]))
+                            .filter(ee.Filter.lt(cfg["cloud_prop"], 50))   # relaxed for count check only
                         )
                         count = col.size().getInfo()
-                        st.write(f"📡 Scenes available for Year 1: {count}")
+                        st.write(f"📡 Scenes available for Year 1 (cloud<50%): {count}")
                         if count == 0:
                             st.error(
-                                "❌ No satellite scenes found. "
-                                "Try a different year, larger buffer, or higher cloud tolerance."
+                                "❌ No satellite scenes found at all for these coordinates and year. "
+                                "Try a different year or larger buffer radius."
                             )
                             st.stop()
                     except Exception as debug_e:
