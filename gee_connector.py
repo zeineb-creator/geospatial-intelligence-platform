@@ -1,7 +1,7 @@
 """
 gee_connector.py — Google Earth Engine direct image fetcher
 ============================================================
-Robust implementation with improved error handling and fallback strategies.
+Robust implementation with proper error handling and fallback strategies.
 """
 
 import os
@@ -162,6 +162,39 @@ def _aoi_from_point(lon: float, lat: float, buffer_km: float):
     return ee.Geometry.Point([lon, lat]).buffer(buffer_km * 1000).bounds()
 
 
+def _get_aoi_geojson(aoi):
+    """Convert GEE geometry to GeoJSON polygon for download."""
+    try:
+        # Get coordinates from the bounds
+        coords = aoi.coordinates().getInfo()
+        
+        # If it's a rectangle, we need to format it properly
+        if len(coords) == 1:
+            # Already a polygon
+            points = coords[0]
+        else:
+            # Convert bounds to polygon
+            bounds = aoi.bounds().getInfo()
+            # bounds returns [xmin, ymin, xmax, ymax]
+            min_x, min_y, max_x, max_y = bounds['coordinates'][0]
+            points = [
+                [min_x, min_y],
+                [min_x, max_y],
+                [max_x, max_y],
+                [max_x, min_y],
+                [min_x, min_y]
+            ]
+        
+        return {
+            "type": "Polygon",
+            "coordinates": [points]
+        }
+    except Exception as e:
+        print(f"[GEE] Error getting AOI GeoJSON: {e}")
+        # Fallback: create a simple square based on the point
+        return None
+
+
 def _build_collection(cfg: dict, aoi, year: int,
                       month_start: int = 1, month_end: int = 12,
                       cloud_max_override: float = None):
@@ -220,18 +253,69 @@ def _download_via_url(image, aoi, cfg: dict, scale: int) -> np.ndarray | None:
         # Ensure the image is properly clipped to AOI
         clipped = image.clip(aoi)
         
-        # Get the bounds as a GeoJSON
-        bounds = aoi.bounds().getInfo()
-        region = {
-            "type": "Polygon",
-            "coordinates": [[
-                [bounds[0], bounds[1]],
-                [bounds[0], bounds[3]],
-                [bounds[2], bounds[3]],
-                [bounds[2], bounds[1]],
-                [bounds[0], bounds[1]]
-            ]]
-        }
+        # Get the AOI as a simple rectangle from bounds
+        try:
+            # Get bounds directly from AOI
+            bounds = aoi.bounds().getInfo()
+            
+            # bounds returns a dict with 'coordinates' containing the polygon
+            if 'coordinates' in bounds and len(bounds['coordinates']) > 0:
+                coords = bounds['coordinates'][0]
+                # Extract min and max coordinates
+                min_x = min(p[0] for p in coords)
+                max_x = max(p[0] for p in coords)
+                min_y = min(p[1] for p in coords)
+                max_y = max(p[1] for p in coords)
+            else:
+                # Fallback: try to get coordinates directly
+                coords_list = aoi.coordinates().getInfo()
+                if isinstance(coords_list, list) and len(coords_list) > 0:
+                    if len(coords_list[0]) > 0:
+                        points = coords_list[0]
+                        min_x = min(p[0] for p in points)
+                        max_x = max(p[0] for p in points)
+                        min_y = min(p[1] for p in points)
+                        max_y = max(p[1] for p in points)
+                    else:
+                        raise ValueError("Empty coordinates")
+                else:
+                    raise ValueError("Invalid coordinates format")
+            
+            # Create GeoJSON rectangle
+            region = {
+                "type": "Polygon",
+                "coordinates": [[
+                    [min_x, min_y],
+                    [min_x, max_y],
+                    [max_x, max_y],
+                    [max_x, min_y],
+                    [min_x, min_y]
+                ]]
+            }
+            print(f"[GEE] AOI bounds: ({min_x:.4f}, {min_y:.4f}) to ({max_x:.4f}, {max_y:.4f})")
+            
+        except Exception as e:
+            print(f"[GEE] Error getting AOI bounds: {e}")
+            # Last resort: create a simple square around the center
+            # Get center point from the image or AOI
+            try:
+                centroid = aoi.centroid().coordinates().getInfo()
+                center_lon, center_lat = centroid[0], centroid[1]
+                half_side = scale / 111320  # approximate degrees at equator
+                region = {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [center_lon - half_side, center_lat - half_side],
+                        [center_lon - half_side, center_lat + half_side],
+                        [center_lon + half_side, center_lat + half_side],
+                        [center_lon + half_side, center_lat - half_side],
+                        [center_lon - half_side, center_lat - half_side]
+                    ]]
+                }
+                print(f"[GEE] Using fallback bounds around ({center_lon:.4f}, {center_lat:.4f})")
+            except:
+                print("[GEE] Cannot determine AOI bounds for download")
+                return None
         
         # Build download parameters
         params = {
@@ -240,10 +324,6 @@ def _download_via_url(image, aoi, cfg: dict, scale: int) -> np.ndarray | None:
             "format": "GEO_TIFF",
             "crs": "EPSG:4326",
         }
-        
-        # For multi-band downloads, specify bands
-        if len(cfg["bands"]) > 1:
-            params["bands"] = cfg["bands"]
         
         print(f"[GEE] Requesting download at {scale}m scale...")
         url = clipped.getDownloadURL(params)
@@ -259,60 +339,58 @@ def _download_via_url(image, aoi, cfg: dict, scale: int) -> np.ndarray | None:
                     print(f"[GEE] HTTP {r.status_code}")
                     error_text = r.text[:500] if r.text else "No response body"
                     print(f"[GEE] Error response: {error_text}")
-                    
-                    # Check if it's a quota error
-                    if "Quota exceeded" in error_text or "User project limit" in error_text:
-                        print("[GEE] Quota exceeded — consider using a different project")
                     return None
                 
                 # Check content type
                 content_type = r.headers.get("Content-Type", "")
-                print(f"[GEE] Content-Type: {content_type}")
-                print(f"[GEE] Content-Length: {len(r.content)} bytes")
+                content_length = len(r.content)
+                print(f"[GEE] Content-Type: {content_type}, Size: {content_length} bytes")
                 
-                # Try to detect JSON error messages
-                if r.content and len(r.content) < 5000:
-                    try:
-                        error_json = r.json()
-                        if "error" in error_json:
-                            print(f"[GEE] GEE returned error JSON: {error_json.get('error', {}).get('message', 'Unknown error')}")
-                            return None
-                    except:
-                        pass
-                
-                # Verify it's a zip file
-                if not r.content or len(r.content) < 100:
-                    print("[GEE] Empty response received")
-                    return None
-                
-                # Check for zip signature (PK)
-                if r.content[:2] != b'PK':
-                    # Try to decode as text for error message
+                # Check if response is too small (likely an error)
+                if content_length < 100:
                     try:
                         preview = r.content[:200].decode('utf-8', errors='ignore')
-                        if "error" in preview.lower() or "failed" in preview.lower():
-                            print(f"[GEE] Server error response: {preview}")
+                        if "error" in preview.lower():
+                            print(f"[GEE] Error response (small size): {preview}")
                         else:
-                            print(f"[GEE] Unexpected response (not a zip file): {preview[:100]}")
+                            print(f"[GEE] Empty or very small response")
+                    except:
+                        print("[GEE] Empty response received")
+                    return None
+                
+                # Verify it's a zip file (PK header)
+                if r.content[:2] != b'PK':
+                    try:
+                        preview = r.content[:200].decode('utf-8', errors='ignore')
+                        print(f"[GEE] Response is not a zip file. Preview: {preview[:100]}")
                     except:
                         print("[GEE] Response is not a zip file (no PK header)")
                     return None
                 
-                # Success — process the zip file
+                # Process zip file
                 print("[GEE] Download successful, processing zip file...")
                 
                 with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-                    tif_names = sorted([n for n in z.namelist() if n.lower().endswith(".tif")])
-                    print(f"[GEE] Found {len(tif_names)} TIF file(s) in zip: {tif_names}")
+                    # List all files in zip
+                    all_files = z.namelist()
+                    print(f"[GEE] Files in zip: {all_files}")
+                    
+                    # Look for TIF files
+                    tif_names = sorted([n for n in all_files if n.lower().endswith(".tif")])
+                    
+                    if not tif_names:
+                        # Maybe it's a single band file
+                        tif_names = sorted([n for n in all_files if ".tif" in n.lower()])
                     
                     if not tif_names:
                         print("[GEE] No TIF files found in zip")
                         return None
                     
+                    print(f"[GEE] Found {len(tif_names)} TIF file(s): {tif_names}")
+                    
                     # Read all bands
                     bands = []
                     for name in tif_names:
-                        # Extract to temporary file
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
                             tmp.write(z.read(name))
                             tmp_path = tmp.name
@@ -331,7 +409,12 @@ def _download_via_url(image, aoi, cfg: dict, scale: int) -> np.ndarray | None:
                         print("[GEE] No bands extracted from zip")
                         return None
                     
-                    array = np.stack(bands, axis=0)
+                    # Stack bands
+                    if len(bands) == 1:
+                        array = bands[0].reshape(1, bands[0].shape[0], bands[0].shape[1])
+                    else:
+                        array = np.stack(bands, axis=0)
+                    
                     array = np.clip(array, 0.0, 1.0)
                     print(f"[GEE] Successfully extracted array shape: {array.shape}")
                     return array
@@ -346,15 +429,21 @@ def _download_via_url(image, aoi, cfg: dict, scale: int) -> np.ndarray | None:
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
+            except zipfile.BadZipFile as e:
+                print(f"[GEE] BadZipFile error: {e}")
+                # Try to see what the content actually is
+                try:
+                    preview = r.content[:500].decode('utf-8', errors='ignore')
+                    print(f"[GEE] Response preview: {preview[:200]}")
+                except:
+                    pass
+                return None
             except Exception as e:
                 print(f"[GEE] Processing error: {e}")
                 return None
         
         return None
         
-    except zipfile.BadZipFile as e:
-        print(f"[GEE] BadZipFile error: {e}")
-        return None
     except Exception as e:
         import traceback
         print(f"[GEE] Unexpected error in _download_via_url: {e}")
@@ -401,6 +490,7 @@ def fetch_image_as_array(
     for cloud_limit in cloud_limits:
         try:
             col = _build_collection(cfg, aoi, year, month_start, month_end, cloud_max_override=cloud_limit)
+            # Use .size() which returns a Server-side object, getInfo() for actual count
             count = col.size().getInfo()
             print(f"[GEE] Scenes (cloud<{cloud_limit}%): {count}")
             if count > 0:
@@ -452,7 +542,7 @@ def fetch_image_as_array(
         
         # Wait a bit before retry
         if try_scale != scales_to_try[-1]:
-            time.sleep(1)
+            time.sleep(2)
     
     if array is None:
         print("[GEE] All download attempts failed")
