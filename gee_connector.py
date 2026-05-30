@@ -1,382 +1,310 @@
 """
-gee_connector.py — Optimized Google Earth Engine connector
-===========================================================
-Fast preview-based streaming + actual data download
+gee_connector.py — Google Earth Engine direct image fetcher
+============================================================
 """
 
-import ee
-import numpy as np
-import tempfile
-import io
-import zipfile
-import requests
-import time
 import os
+import json
+import tempfile
+import numpy as np
 
 
-# ─────────────────────────────────────────────
-# INIT GEE (SIMPLIFIED)
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# GEE INITIALISATION
+# ─────────────────────────────────────────────────────────────
 
-def init_gee():
-    import ee
-    import streamlit as st
+def init_gee() -> bool:
+    try:
+        import ee
+    except ImportError:
+        print("[GEE] earthengine-api not installed")
+        return False
 
     try:
-        ee.Initialize()
-        print("[GEE] Default init OK")
-        return True
-    except Exception as e:
-        print("[GEE] Default init failed:", e)
+        import streamlit as st
+        sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
+        if not sa_info:
+            print("[GEE] No GEE_SERVICE_ACCOUNT in secrets")
+            return False
 
-    try:
-        sa = st.secrets["GEE_SERVICE_ACCOUNT"]
-        print("[GEE] Secrets loaded OK")
-        print("[GEE] client_email =", sa.get("client_email"))
+        sa_dict = {
+            "type":                        sa_info.get("type", "service_account"),
+            "project_id":                  sa_info["project_id"],
+            "private_key_id":              sa_info["private_key_id"],
+            "private_key":                 sa_info["private_key"].replace("\\n", "\n"),
+            "client_email":                sa_info["client_email"],
+            "client_id":                   sa_info["client_id"],
+            "auth_uri":                    sa_info.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+            "token_uri":                   sa_info.get("token_uri", "https://oauth2.googleapis.com/token"),
+            "auth_provider_x509_cert_url": sa_info.get("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
+            "client_x509_cert_url":        sa_info.get("client_x509_cert_url", ""),
+        }
 
-        from oauth2client.service_account import ServiceAccountCredentials
-
-        credentials = ServiceAccountCredentials(
-            sa["client_email"],
-            key_data=sa["private_key"]
+        credentials = ee.ServiceAccountCredentials(
+            email=sa_dict["client_email"],
+            key_data=json.dumps(sa_dict),
         )
-
-        ee.Initialize(credentials)
-        print("[GEE] Service account init OK")
+        ee.Initialize(credentials, project=sa_dict["project_id"])
+        print("[GEE] Initialized via Streamlit service account")
         return True
 
     except Exception as e:
-        print("[GEE] Service account init failed:", e)
+        print(f"[GEE] Streamlit auth failed: {e}")
+
+    try:
+        import ee
+        ee.Initialize()
+        print("[GEE] Initialized via default credentials")
+        return True
+    except Exception as e:
+        print(f"[GEE] Default auth failed: {e}")
 
     return False
 
-def gee_available():
-    """Check if GEE is available."""
+
+def gee_available() -> bool:
     try:
         import ee
         ee.Number(1).getInfo()
         return True
-    except:
+    except Exception:
         return False
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # SENSOR CONFIGS
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 
 SENSOR_CONFIGS = {
-    "Sentinel-2 SR": {
-        "collection": "COPERNICUS/S2_SR_HARMONIZED",
-        "bands": ["B4", "B3", "B2", "B8"],  # RGB + NIR
-        "scale": 0.0001,
-        "resolution": 10,
-        "cloud": "CLOUDY_PIXEL_PERCENTAGE",
-        "start": 2017,
+    "Sentinel-2 L2A": {
+        "collection":   "COPERNICUS/S2_SR_HARMONIZED",
+        "bands":        ["B2", "B3", "B4", "B8", "B11", "B12"],
+        "scale_factor": 0.0001,
+        "resolution":   10,
+        "cloud_prop":   "CLOUDY_PIXEL_PERCENTAGE",
+        "cloud_max":    30,
     },
     "Landsat 8/9": {
-        "collection": "LANDSAT/LC08/C02/T1_L2",
-        "bands": ["SR_B4", "SR_B3", "SR_B2", "SR_B5"],
-        "scale": 0.0000275,
-        "offset": -0.2,
-        "resolution": 30,
-        "cloud": "CLOUD_COVER",
-        "start": 2013,
+        "collection":   "LANDSAT/LC08/C02/T1_L2",
+        "bands":        ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"],
+        "scale_factor": 0.0000275,
+        "offset":       -0.2,
+        "resolution":   30,
+        "cloud_prop":   "CLOUD_COVER",
+        "cloud_max":    30,
     },
-    "Landsat 7": {
-        "collection": "LANDSAT/LE07/C02/T1_L2",
-        "bands": ["SR_B3", "SR_B2", "SR_B1", "SR_B4"],
-        "scale": 0.0000275,
-        "offset": -0.2,
-        "resolution": 30,
-        "cloud": "CLOUD_COVER",
-        "start": 1999,
-    }
+    "Landsat 5 TM": {
+        "collection":   "LANDSAT/LT05/C02/T1_L2",
+        "bands":        ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"],
+        "scale_factor": 0.0000275,
+        "offset":       -0.2,
+        "resolution":   30,
+        "cloud_prop":   "CLOUD_COVER",
+        "cloud_max":    30,
+    },
 }
 
 
-def auto_sensor(year):
+def auto_select_sensor(year: int) -> str:
     if year >= 2017:
-        return "Sentinel-2 SR"
+        return "Sentinel-2 L2A"
     elif year >= 2013:
         return "Landsat 8/9"
-    return "Landsat 7"
+    else:
+        return "Landsat 5 TM"
 
 
-# ─────────────────────────────────────────────
-# AOI
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# IMAGE FETCHING
+# ─────────────────────────────────────────────────────────────
 
-def aoi(lon, lat, km):
-    return ee.Geometry.Point([lon, lat]).buffer(km * 1000).bounds()
-
-
-# ─────────────────────────────────────────────
-# COLLECTION BUILDER
-# ─────────────────────────────────────────────
-
-def build_collection(cfg, aoi_geom, year, cloud_max=80):
-    start = f"{year}-01-01"
-    end = f"{year+1}-01-01"
-
-    col = (
-        ee.ImageCollection(cfg["collection"])
-        .filterBounds(aoi_geom)
-        .filterDate(start, end)
-        .filter(ee.Filter.lt(cfg["cloud"], cloud_max))
-    )
-    
-    return col.select(cfg["bands"])
-
-
-# ─────────────────────────────────────────────
-# SCALING
-# ─────────────────────────────────────────────
-
-def apply_scaling(img, cfg):
-    img = img.multiply(cfg["scale"])
-    if "offset" in cfg:
-        img = img.add(cfg["offset"])
-    return img
-
-
-# ─────────────────────────────────────────────
-# GET BEST IMAGE (LOWEST CLOUD COVER)
-# ─────────────────────────────────────────────
-
-def get_best_image(lat, lon, year, buffer_km=5, sensor=None):
-    """Get the least cloudy image for the location/year."""
-    sensor = sensor or auto_sensor(year)
-    cfg = SENSOR_CONFIGS[sensor]
-    
-    region = aoi(lon, lat, buffer_km)
-    
-    # Try with relaxed cloud filters
-    for cloud_max in [30, 60, 80]:
-        try:
-            col = build_collection(cfg, region, year, cloud_max=cloud_max)
-            count = col.size().getInfo()
-            if count > 0:
-                print(f"[GEE] Found {count} scenes with cloud < {cloud_max}%")
-                # Get the least cloudy image
-                image = col.sort(cfg["cloud"]).first()
-                return image, cfg, region
-        except Exception as e:
-            print(f"[GEE] Error checking cloud level {cloud_max}: {e}")
-    
-    print(f"[GEE] No scenes found for {sensor} {year}")
-    return None, None, None
-
-
-# ─────────────────────────────────────────────
-# FAST PREVIEW URL (FOR UI)
-# ─────────────────────────────────────────────
-
-def get_preview_url(image, region, vis_params=None):
-    """Get a fast preview URL for the image."""
-    if vis_params is None:
-        vis_params = {
-            "min": 0,
-            "max": 0.3,
-            "bands": ["B4", "B3", "B2"]  # RGB
-        }
-    
+def fetch_image_as_array(
+    lat: float,
+    lon: float,
+    year: int,
+    month_start: int = 1,
+    month_end: int = 12,
+    sensor: str = None,
+    buffer_km: float = 5.0,
+):
     try:
-        # Get region as GeoJSON
-        region_json = region.getInfo()
-        
-        params = {
-            "region": region_json,
-            "dimensions": 1024,
-            "format": "png"
-        }
-        params.update(vis_params)
-        
-        return image.getThumbURL(params)
-    except Exception as e:
-        print(f"[GEE] Preview URL error: {e}")
+        import ee
+    except ImportError:
         return None
 
+    sensor = sensor or auto_select_sensor(year)
+    cfg    = SENSOR_CONFIGS[sensor]
 
-# ─────────────────────────────────────────────
-# DOWNLOAD ACTUAL DATA
-# ─────────────────────────────────────────────
+    print(f"[GEE] Fetching {sensor} {year}")
 
-def download_image_as_array(image, region, cfg, scale=30):
-    """Download the actual image data as a numpy array."""
+    point = ee.Geometry.Point([lon, lat])
+    aoi   = point.buffer(buffer_km * 1000).bounds()
+
+    start = f"{year}-{month_start:02d}-01"
+    end   = f"{year}-{month_end:02d}-28"
+
+    # Try progressively relaxed cloud filters
+    col = None
+    for cloud_max in [cfg["cloud_max"], 50, 80]:
+        col = (
+            ee.ImageCollection(cfg["collection"])
+            .filterBounds(aoi)
+            .filterDate(start, end)
+            .filter(ee.Filter.lt(cfg["cloud_prop"], cloud_max))
+            .select(cfg["bands"])
+        )
+        count = col.size().getInfo()
+        print(f"[GEE] Scenes found (cloud<{cloud_max}%): {count}")
+        if count > 0:
+            break
+
+    if col is None or col.size().getInfo() == 0:
+        print("[GEE] No scenes found")
+        return None
+
+    # Build median composite — do NOT apply scaling here,
+    # scaling is applied AFTER getDownloadURL on the raw values
+    image = col.median()
+    image = image.clip(aoi)
+
     try:
-        # Get region as GeoJSON
-        region_json = region.getInfo()
-        
-        # Build download parameters
+        import requests, zipfile, io, rasterio, time
+
+        # Use 60m to stay well under GEE's download size limit
+        download_scale = 60
+
         params = {
-            "scale": scale,
-            "region": region_json,
+            "scale":  download_scale,
+            "region": aoi.getInfo(),
             "format": "GEO_TIFF",
-            "crs": "EPSG:4326",
+            "bands":  cfg["bands"],
+            "crs":    "EPSG:4326",
         }
-        
-        print(f"[GEE] Downloading at {scale}m resolution...")
+
+        print(f"[GEE] Requesting download at {download_scale}m...")
         url = image.getDownloadURL(params)
-        
-        # Download with retry
+        print(f"[GEE] URL obtained, downloading...")
+
+        # Retry logic
+        r = None
         for attempt in range(3):
             try:
-                response = requests.get(url, timeout=300)
-                
-                if response.status_code != 200:
-                    print(f"[GEE] Download failed: HTTP {response.status_code}")
-                    if attempt < 2:
-                        time.sleep(2)
-                        continue
-                    return None
-                
-                # Check if it's a zip file
-                if len(response.content) < 100 or response.content[:2] != b'PK':
-                    print("[GEE] Response is not a valid zip file")
-                    return None
-                
-                # Process zip file
-                import rasterio
-                from rasterio.io import MemoryFile
-                
-                with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                    tif_files = [f for f in z.namelist() if f.endswith('.tif')]
-                    if not tif_files:
-                        print("[GEE] No TIF files in zip")
-                        return None
-                    
-                    # Read the first TIF (should contain all bands)
-                    with z.open(tif_files[0]) as tif_file:
-                        with MemoryFile(tif_file) as memfile:
-                            with memfile.open() as src:
-                                array = src.read().astype(np.float32)
-                    
-                    # Apply scaling
-                    array = array * cfg["scale"]
-                    if "offset" in cfg:
-                        array = array + cfg["offset"]
-                    
-                    array = np.clip(array, 0.0, 1.0)
-                    print(f"[GEE] Downloaded array shape: {array.shape}")
-                    return array
-                    
+                r = requests.get(url, timeout=300)
+                if r.status_code == 200:
+                    break
+                print(f"[GEE] HTTP {r.status_code} on attempt {attempt+1}, retrying...")
+                time.sleep(3)
             except requests.exceptions.Timeout:
-                print(f"[GEE] Timeout on attempt {attempt + 1}")
-                if attempt < 2:
-                    time.sleep(2)
-                    continue
-            except Exception as e:
-                print(f"[GEE] Download error on attempt {attempt + 1}: {e}")
-                if attempt < 2:
-                    time.sleep(2)
-                    continue
-        
+                print(f"[GEE] Timeout on attempt {attempt+1}")
+                time.sleep(3)
+
+        if r is None or r.status_code != 200:
+            print(f"[GEE] Download failed after retries")
+            return None
+
+        print(f"[GEE] Downloaded {len(r.content)/1024:.1f} KB")
+
+        # Validate it's actually a zip (starts with PK magic bytes)
+        if len(r.content) < 4 or r.content[:2] != b'PK':
+            print(f"[GEE] Not a zip file. Content preview: {r.content[:300]}")
+            return None
+
+        # GEE zip contains one TIF per band, named by band
+        bands_data = []
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            tif_names = sorted([n for n in z.namelist() if n.endswith(".tif")])
+            print(f"[GEE] ZIP contains {len(tif_names)} files: {tif_names}")
+
+            for name in tif_names:
+                # Must write to real temp file — rasterio needs seekable file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
+                    tmp.write(z.read(name))
+                    tmp_path = tmp.name
+                try:
+                    with rasterio.open(tmp_path) as src:
+                        band_data = src.read(1).astype(np.float32)
+                        bands_data.append(band_data)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+        if not bands_data:
+            print("[GEE] No bands extracted")
+            return None
+
+        # Stack bands into (C, H, W)
+        array = np.stack(bands_data, axis=0)
+
+        # Apply scaling NOW (on raw DN values from the download)
+        array = array * cfg["scale_factor"]
+        if "offset" in cfg:
+            array = array + cfg["offset"]
+
+        array = np.clip(array, 0.0, 1.0)
+
+        meta = {
+            "sensor": sensor,
+            "year":   year,
+            "source": "GEE",
+        }
+
+        print(f"[GEE] Success — shape: {array.shape}, "
+              f"range: [{array.min():.3f}, {array.max():.3f}]")
+        return array, meta
+
+    except zipfile.BadZipFile:
+        print("[GEE] BadZipFile — GEE returned an error page instead of a zip")
+        if r is not None:
+            print(f"[GEE] Response preview: {r.content[:500]}")
         return None
-            
+
     except Exception as e:
         print(f"[GEE] Download error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
-# ─────────────────────────────────────────────
-# MAIN FETCH FUNCTIONS
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# SAVE FUNCTION
+# ─────────────────────────────────────────────────────────────
 
-def fetch_image_as_array(lat, lon, year, buffer_km=5.0, sensor=None):
-    """
-    Fetch the best available image as a numpy array.
-    Returns (array, meta) on success, None on failure.
-    """
-    # Get the best image
-    image, cfg, region = get_best_image(lat, lon, year, buffer_km, sensor)
-    
-    if image is None:
-        return None
-    
-    # Apply scaling and clip
-    image = apply_scaling(image, cfg).clip(region)
-    
-    # Calculate optimal scale
-    side_m = buffer_km * 2 * 1000
-    optimal_scale = max(int(side_m / 400), cfg["resolution"])
-    optimal_scale = min(optimal_scale, 100)  # Cap at 100m
-    
-    # Download the actual data
-    array = download_image_as_array(image, region, cfg, scale=optimal_scale)
-    
-    if array is None:
-        return None
-    
-    meta = {
-        "sensor": sensor or auto_sensor(year),
-        "year": year,
-        "source": "GEE",
-        "n_bands": array.shape[0],
-        "scale_used": optimal_scale,
-    }
-    
-    return array, meta
-
-
-def fetch_preview_only(lat, lon, year, buffer_km=5.0, sensor=None):
-    """Get only a preview URL (much faster)."""
-    image, cfg, region = get_best_image(lat, lon, year, buffer_km, sensor)
-    
-    if image is None:
-        return None, None
-    
-    image = apply_scaling(image, cfg).clip(region)
-    
-    vis_params = {
-        "min": 0,
-        "max": 0.3,
-        "bands": cfg["bands"][:3]
-    }
-    
-    url = get_preview_url(image, region, vis_params)
-    
-    meta = {
-        "sensor": sensor or auto_sensor(year),
-        "year": year,
-        "mode": "preview"
-    }
-    
-    return url, meta
-
-
-def save_array_to_geotiff(array, meta, output_path):
-    """Save numpy array to GeoTIFF."""
+def save_array_as_geotiff(array: np.ndarray, meta: dict, output_path: str):
     try:
         import rasterio
-        from rasterio.transform import from_origin
-        
-        transform = from_origin(0, 0, 1, 1)
-        
+
         with rasterio.open(
-            output_path, 'w',
-            driver='GTiff',
+            output_path,
+            "w",
+            driver="GTiff",
             height=array.shape[1],
             width=array.shape[2],
             count=array.shape[0],
             dtype=np.float32,
-            crs='EPSG:4326',
-            transform=transform
         ) as dst:
             dst.write(array)
+
         return output_path
+
     except Exception as e:
         print(f"[GEE] Save failed: {e}")
         return None
 
 
-def fetch_and_save(lat, lon, year, buffer_km=5.0, sensor=None):
-    """Fetch image and save to temporary file."""
-    result = fetch_image_as_array(lat, lon, year, buffer_km, sensor)
+def fetch_and_save(lat, lon, year, buffer_km=5.0, sensor=None, **kwargs):
+    """Fetch image and save to a temporary GeoTIFF file."""
+    result = fetch_image_as_array(
+        lat=lat, lon=lon, year=year,
+        buffer_km=buffer_km, sensor=sensor,
+    )
     if result is None:
         return None
-    
+
     array, meta = result
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp:
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
         path = tmp.name
-    
-    return save_array_to_geotiff(array, meta, path)
+
+    return save_array_as_geotiff(array, meta, path)
