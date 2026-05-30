@@ -1057,4 +1057,3 @@ with tab_report:
                 file_name=f"geointel_{region_str.replace(' ', '_').replace(',', '')}.txt",
                 mime="text/plain",
             )
-```
