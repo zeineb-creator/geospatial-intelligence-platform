@@ -22,21 +22,34 @@ def init_gee() -> bool:
 
     try:
         import streamlit as st
+
         sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
         if not sa_info:
-            print("[GEE] No GEE_SERVICE_ACCOUNT in secrets")
+            print("[GEE] No GEE_SERVICE_ACCOUNT found in secrets")
+            return False
+
+        print(f"[GEE] Secrets found, client_email = {sa_info.get('client_email', 'MISSING')}")
+        print(f"[GEE] project_id = {sa_info.get('project_id', 'MISSING')}")
+
+        private_key = sa_info["private_key"]
+        # Fix newlines — Streamlit may store literal \n
+        private_key = private_key.replace("\\n", "\n")
+
+        # Validate key format
+        if "BEGIN PRIVATE KEY" not in private_key:
+            print(f"[GEE] private_key looks malformed: {private_key[:80]}")
             return False
 
         sa_dict = {
-            "type":                        sa_info.get("type", "service_account"),
+            "type":                        "service_account",
             "project_id":                  sa_info["project_id"],
             "private_key_id":              sa_info["private_key_id"],
-            "private_key":                 sa_info["private_key"].replace("\\n", "\n"),
+            "private_key":                 private_key,
             "client_email":                sa_info["client_email"],
             "client_id":                   sa_info["client_id"],
-            "auth_uri":                    sa_info.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
-            "token_uri":                   sa_info.get("token_uri", "https://oauth2.googleapis.com/token"),
-            "auth_provider_x509_cert_url": sa_info.get("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
+            "auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
+            "token_uri":                   "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
             "client_x509_cert_url":        sa_info.get("client_x509_cert_url", ""),
         }
 
@@ -44,23 +57,22 @@ def init_gee() -> bool:
             email=sa_dict["client_email"],
             key_data=json.dumps(sa_dict),
         )
-        ee.Initialize(credentials, project=sa_dict["project_id"])
-        print("[GEE] Initialized via Streamlit service account")
-        return True
 
-    except Exception as e:
-        print(f"[GEE] Streamlit auth failed: {e}")
+        project_id = sa_dict["project_id"]
+        print(f"[GEE] Calling ee.Initialize with project={project_id}")
 
-    try:
-        import ee
-        ee.Initialize()
-        print("[GEE] Initialized via default credentials")
-        return True
-    except Exception as e:
-        print(f"[GEE] Default auth failed: {e}")
+        ee.Initialize(
+            credentials=credentials,
+            project=project_id,
+            opt_url="https://earthengine.googleapis.com",
+        )
 
-    return False
-
+        # Verify it actually works
+        test = ee.Number(42).getInfo()
+        print(f"[GEE] Verification test: {test}")
+        if test != 42:
+            print("[GEE] Verification failed")
+            return False
 
 def gee_available() -> bool:
     try:
