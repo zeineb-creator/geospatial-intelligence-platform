@@ -84,16 +84,16 @@ SENSOR_CONFIGS = {
         "scale_factor": 0.0001,
         "resolution": 10,
         "cloud_prop": "CLOUDY_PIXEL_PERCENTAGE",
-        "cloud_max": 20,
+        "cloud_max": 30,
     },
     "Landsat 8/9": {
-        "collection": "LANDSAT/LC09/C02/T1_L2",
+        "collection": "LANDSAT/LC08/C02/T1_L2",   # ← LC08 not LC09
         "bands": ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"],
         "scale_factor": 0.0000275,
         "offset": -0.2,
         "resolution": 30,
         "cloud_prop": "CLOUD_COVER",
-        "cloud_max": 20,
+        "cloud_max": 30,                            # ← raised from 20
     },
     "Landsat 5 TM": {
         "collection": "LANDSAT/LT05/C02/T1_L2",
@@ -102,7 +102,7 @@ SENSOR_CONFIGS = {
         "offset": -0.2,
         "resolution": 30,
         "cloud_prop": "CLOUD_COVER",
-        "cloud_max": 20,
+        "cloud_max": 30,                            # ← raised from 20
     },
 }
 
@@ -111,7 +111,7 @@ def auto_select_sensor(year: int) -> str:
     if year >= 2017:
         return "Sentinel-2 L2A"
     elif year >= 2013:
-        return "Landsat 8/9"
+        return "Landsat 8/9"    # now correctly uses LC08
     else:
         return "Landsat 5 TM"
 
