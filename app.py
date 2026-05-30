@@ -1,4 +1,3 @@
-Here is the complete `app.py` with the GEE debug section added:
 
 ```python
 """
