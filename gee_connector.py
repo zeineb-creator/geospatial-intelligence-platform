@@ -20,43 +20,28 @@ def init_gee() -> bool:
         print("[GEE] earthengine-api not installed")
         return False
 
-    # 1) Streamlit secrets (recommended)
     try:
         import streamlit as st
         sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
 
         if sa_info:
-            import json
+            key_dict = {k: v for k, v in sa_info.items()}
+            key_json = json.dumps(key_dict)
+
             credentials = ee.ServiceAccountCredentials(
                 email=sa_info["client_email"],
-                key_data=sa_info["private_key"],
-                )
+                key_data=key_json,
+            )
             ee.Initialize(credentials)
             print("[GEE] Initialized via Streamlit service account")
             return True
 
     except Exception as e:
-        print(f"[GEE] Streamlit auth failed: {e}")
-
-    # 2) Environment fallback
-    try:
-        ee.Initialize()
-        print("[GEE] Initialized via default credentials")
-        return True
-    except Exception as e:
-        print(f"[GEE] Default auth failed: {e}")
+        # ← THIS LINE IS HIDING YOUR REAL ERROR
+        # Change it to re-raise so you see the actual message:
+        raise RuntimeError(f"[GEE] Streamlit auth failed: {e}") from e
 
     return False
-
-def gee_available() -> bool:
-    """Quick check without reinitializing."""
-    try:
-        import ee
-        ee.Number(1).getInfo()
-        return True
-    except Exception:
-        return False
-
 
 # ─────────────────────────────────────────────────────────────
 # SENSOR CONFIGS
