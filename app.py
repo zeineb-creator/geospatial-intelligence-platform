@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io, sys, os, tempfile, re
 from datetime import date as _date
-    
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Geospatial Intelligence Platform",
@@ -78,11 +78,9 @@ h3 { font-size: 0.95rem !important; color: #3b82f6 !important; }
 
 .meta-row { display: flex; justify-content: space-between; padding: 0.35rem 0; border-bottom: 1px solid #f0f4ff; font-size: 0.82rem; }
 
-/* Hide only Streamlit branding */
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
 
-/* Keep sidebar collapse/expand buttons always visible */
 [data-testid="collapsedControl"] { visibility: visible !important; display: flex !important; }
 button[kind="header"] { visibility: visible !important; }
 [data-testid="stSidebarCollapseButton"] { visibility: visible !important; }
@@ -90,8 +88,6 @@ button[kind="header"] { visibility: visible !important; }
 """, unsafe_allow_html=True)
 
 # ── Path setup ────────────────────────────────────────────────────────────────
-# NOTE: No pipeline imports here — all imports happen lazily inside the run
-# block so a broken module never crashes the sidebar on page load.
 sys.path.insert(0, os.path.dirname(__file__))
 
 
@@ -105,7 +101,6 @@ def save_upload_to_temp(uploaded_file) -> str:
 
 
 def _extract_lat_from_meta(meta: dict):
-    """Extract latitude from image_meta transform if available."""
     try:
         import rasterio.transform as rt
         t = meta.get("transform")
@@ -118,8 +113,8 @@ def _extract_lat_from_meta(meta: dict):
         pass
     return None
 
+
 def _extract_lon_from_meta(meta: dict):
-    """Extract longitude from image_meta transform if available."""
     try:
         import rasterio.transform as rt
         t = meta.get("transform")
@@ -186,6 +181,8 @@ SECTION_ICONS = {
     "Hydrological": "💧", "Climate": "🌡️", "Aridity": "☀️",
     "Key Findings": "🔍", "Monitoring": "📡", "Confidence": "⚖️",
 }
+
+
 def get_icon(title):
     for key, icon in SECTION_ICONS.items():
         if key.lower() in title.lower():
@@ -217,7 +214,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Input mode ────────────────────────────────────────────────────────────
     st.markdown("### 📡 Image Input")
     input_mode = st.radio(
         "Source",
@@ -226,31 +222,28 @@ with st.sidebar:
         help="Upload your own GeoTIFF, or fetch directly from Google Earth Engine."
     )
 
-    uploaded_t1  = None
-    uploaded_t2  = None
-    gee_params   = None   # dict if GEE mode selected
+    uploaded_t1 = None
+    uploaded_t2 = None
+    gee_params  = None
 
     if input_mode == "Upload image(s)":
         uploaded_t1 = st.file_uploader(
             "Primary image (or earlier date)",
-            type=["tif","tiff","png","jpg"], key="img_t1",
+            type=["tif", "tiff", "png", "jpg"], key="img_t1",
             help="GeoTIFF preferred — 6-band Sentinel-2 or Landsat recommended."
         )
         uploaded_t2 = st.file_uploader(
             "Second image — optional (later date)",
-            type=["tif","tiff","png","jpg"], key="img_t2",
+            type=["tif", "tiff", "png", "jpg"], key="img_t2",
             help="Upload for temporal NDVI change detection."
         )
-        # Acquisition dates (Feature 3)
         if uploaded_t1 is not None or uploaded_t2 is not None:
             st.markdown("#### 📅 Acquisition Dates")
             col_d1, col_d2 = st.columns(2)
             with col_d1:
-                date_t1 = st.date_input("Image 1", value=None, key="date_t1",
-                                        help="Acquisition date of primary image.")
+                date_t1 = st.date_input("Image 1", value=None, key="date_t1")
             with col_d2:
-                date_t2 = st.date_input("Image 2", value=None, key="date_t2",
-                                        help="Acquisition date of second image.")
+                date_t2 = st.date_input("Image 2", value=None, key="date_t2")
         else:
             date_t1 = date_t2 = None
 
@@ -265,10 +258,10 @@ with st.sidebar:
         st.markdown("**Temporal range**")
         col_y1, col_y2 = st.columns(2)
         with col_y1:
-            gee_year1 = st.number_input("Year 1 (earlier)", value=2010,
+            gee_year1 = st.number_input("Year 1 (earlier)", value=2015,
                                         min_value=1984, max_value=2024, key="gee_y1")
         with col_y2:
-            gee_year2 = st.number_input("Year 2 (later)",   value=2024,
+            gee_year2 = st.number_input("Year 2 (later)",   value=2023,
                                         min_value=1984, max_value=2024, key="gee_y2")
 
         gee_sensor = st.selectbox(
@@ -279,40 +272,32 @@ with st.sidebar:
         gee_buffer = st.slider("Area radius (km)", 2.0, 20.0, 5.0, 0.5, key="gee_buf")
 
         gee_params = {
-            "lat": gee_lat, "lon": gee_lon,
-            "year1": int(gee_year1), "year2": int(gee_year2),
-            "sensor": None if gee_sensor == "Auto" else gee_sensor,
+            "lat":       gee_lat,
+            "lon":       gee_lon,
+            "year1":     int(gee_year1),
+            "year2":     int(gee_year2),
+            "sensor":    None if gee_sensor == "Auto" else gee_sensor,
             "buffer_km": gee_buffer,
         }
-        date_t1 = _date(int(gee_year1), 4, 1)   # approximate acquisition date
+        date_t1 = _date(int(gee_year1), 4, 1)
         date_t2 = _date(int(gee_year2), 4, 1)
 
-    # ── Climate data ──────────────────────────────────────────────────────────
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
     st.markdown("### 📊 Climate Data")
     climate_mode = st.radio(
         "Source",
         ["Auto-fetch (NASA POWER)", "Upload CSV"],
         horizontal=True,
-        help="Auto-fetch pulls 15 years of monthly data from NASA POWER API automatically."
     )
     uploaded_csv = None
     if climate_mode == "Upload CSV":
-        uploaded_csv = st.file_uploader(
-            "NASA POWER CSV",
-            type=["csv"], key="csv",
-            help="15-year monthly climate data exported from NASA POWER."
-        )
+        uploaded_csv = st.file_uploader("NASA POWER CSV", type=["csv"], key="csv")
 
-    # ── Time series ───────────────────────────────────────────────────────────
     fetch_timeseries = st.checkbox(
         "📈 Fetch NDVI time series (GEE required)",
         value=False,
-        help="Fetch annual NDVI composites for a multi-year trend chart. "
-             "Requires GEE credentials. Adds ~30s to analysis time."
     )
 
-    # ── Options ───────────────────────────────────────────────────────────────
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
     st.markdown("### ⚙️ Options")
     user_question = st.text_area(
@@ -369,13 +354,14 @@ if not uploaded_t1 and not gee_params:
 # PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 
+pipeline_warnings = []
 status = st.status("Running geospatial analysis pipeline…", expanded=True)
 temp_files = []
 
 try:
     with status:
 
-        # ── Lazy imports — NEVER at module level ──────────────────────────────
+        # ── Lazy imports ──────────────────────────────────────────────────────
         st.write("📦 Loading pipeline modules…")
 
         try:
@@ -412,7 +398,7 @@ try:
         except ImportError:
             try:
                 from geospatial_platform.data_integrator import integrate_data
-                st.warning("⚠️ build_climate_summary / populate_convenience_fields not yet added to data_integrator.py — climate summary skipped.")
+                st.warning("⚠️ build_climate_summary / populate_convenience_fields not found.")
             except Exception as e:
                 import_error_card("geospatial_platform.data_integrator → integrate_data", e); st.stop()
 
@@ -426,48 +412,96 @@ try:
         except Exception as e:
             import_error_card("geospatial_platform.llm_engine → generate_report", e); st.stop()
 
-        # ── Feature 1: GEE direct fetch ──────────────────────────────────────
+        # ── GEE fetch ─────────────────────────────────────────────────────────
         path_t1 = path_t2 = path_csv = None
 
         if gee_params:
             st.write("🛰️ Fetching imagery from Google Earth Engine…")
             try:
-                from gee_connector import init_gee, fetch_and_save, auto_select_sensor
+                from gee_connector import (
+                    init_gee, fetch_and_save, auto_select_sensor, SENSOR_CONFIGS
+                )
+                import ee
+
                 if init_gee():
+                    st.write("✅ GEE initialized")
+
                     sensor1 = gee_params.get("sensor") or auto_select_sensor(gee_params["year1"])
+                    st.write(f"Sensor: {sensor1} | Year: {gee_params['year1']} | "
+                             f"Lat: {gee_params['lat']:.4f} | Lon: {gee_params['lon']:.4f}")
+
+                    # Scene count check
+                    try:
+                        point = ee.Geometry.Point([gee_params["lon"], gee_params["lat"]])
+                        aoi   = point.buffer(gee_params["buffer_km"] * 1000).bounds()
+                        cfg   = SENSOR_CONFIGS[sensor1]
+                        col   = (
+                            ee.ImageCollection(cfg["collection"])
+                            .filterBounds(aoi)
+                            .filterDate(
+                                f"{gee_params['year1']}-01-01",
+                                f"{gee_params['year1']}-12-28"
+                            )
+                            .filter(ee.Filter.lt(cfg["cloud_prop"], cfg["cloud_max"]))
+                        )
+                        count = col.size().getInfo()
+                        st.write(f"📡 Scenes available for Year 1: {count}")
+                        if count == 0:
+                            st.error(
+                                "❌ No satellite scenes found. "
+                                "Try a different year, larger buffer, or higher cloud tolerance."
+                            )
+                            st.stop()
+                    except Exception as debug_e:
+                        st.warning(f"Scene count check failed: {debug_e}")
+
+                    # Fetch image 1
                     path_t1 = fetch_and_save(
-                        lat=gee_params["lat"], lon=gee_params["lon"],
-                        year=gee_params["year1"], sensor=sensor1,
+                        lat=gee_params["lat"],
+                        lon=gee_params["lon"],
+                        year=gee_params["year1"],
+                        sensor=sensor1,
                         buffer_km=gee_params["buffer_km"],
                     )
                     if path_t1:
                         temp_files.append(path_t1)
-                        st.write(f"  ✓ Image 1 ({gee_params['year1']}) fetched from GEE")
+                        st.write(f"  ✓ Image 1 ({gee_params['year1']}) fetched")
                     else:
-                        st.warning("⚠️ GEE Image 1 fetch failed — check credentials or try uploading manually.")
+                        st.error(
+                            "❌ GEE Image 1 fetch failed. "
+                            "Check Streamlit logs for the full traceback."
+                        )
                         st.stop()
 
+                    # Fetch image 2
                     if gee_params["year2"] != gee_params["year1"]:
                         sensor2 = gee_params.get("sensor") or auto_select_sensor(gee_params["year2"])
                         path_t2 = fetch_and_save(
-                            lat=gee_params["lat"], lon=gee_params["lon"],
-                            year=gee_params["year2"], sensor=sensor2,
+                            lat=gee_params["lat"],
+                            lon=gee_params["lon"],
+                            year=gee_params["year2"],
+                            sensor=sensor2,
                             buffer_km=gee_params["buffer_km"],
                         )
                         if path_t2:
                             temp_files.append(path_t2)
-                            st.write(f"  ✓ Image 2 ({gee_params['year2']}) fetched from GEE")
+                            st.write(f"  ✓ Image 2 ({gee_params['year2']}) fetched")
                         else:
-                            pipeline_warnings.append("GEE Image 2 fetch failed — temporal analysis skipped.")
+                            pipeline_warnings.append(
+                                "GEE Image 2 fetch failed — temporal analysis skipped."
+                            )
+
                 else:
-                    st.error("❌ GEE initialisation failed. Add GEE_SERVICE_ACCOUNT to Streamlit secrets.")
+                    st.error("❌ GEE initialisation failed. Check GEE_SERVICE_ACCOUNT secrets.")
                     st.stop()
+
             except Exception as e:
+                import traceback
                 st.error(f"❌ GEE error: {e}")
+                st.code(traceback.format_exc())
                 st.stop()
 
         else:
-            # ── Save uploads to temp files ────────────────────────────────────
             st.write("📥 Saving uploaded files…")
             if uploaded_t1:
                 path_t1 = save_upload_to_temp(uploaded_t1)
@@ -481,30 +515,32 @@ try:
             temp_files.append(path_csv)
 
         # ── Step 1 — Input handling ───────────────────────────────────────────
-        st.write("📥 Validating inputs and extracting metadata…")
-        ic = build_input_context(image_path=path_t1, csv_path=path_csv, question=user_question)
+        st.write("📥 Validating inputs…")
+        ic = build_input_context(
+            image_path=path_t1,
+            csv_path=path_csv,
+            question=user_question,
+        )
 
-        # ── Feature 3: Acquisition date → seasonal context ───────────────────
         if date_t1 is not None:
             ic.acquisition_month = date_t1.month
-            ic.lat = (gee_params["lat"] if gee_params
-                      else getattr(ic, 'lat', None))
+            ic.lat = gee_params["lat"] if gee_params else getattr(ic, "lat", None)
         if date_t2 is not None:
             ic.acquisition_month_t2 = date_t2.month
 
         # ── Step 1b — Second image ────────────────────────────────────────────
         if path_t2:
-            st.write("📅 Loading second image for temporal comparison…")
+            st.write("📅 Loading second image…")
             array_t2, meta_t2, _, _ = load_image(path_t2)
             ic.image_array_t2 = array_t2
             ic.image_meta_t2  = meta_t2
 
         # ── Step 2 — Image processing ─────────────────────────────────────────
-        st.write("🔬 Computing spectral indices (NDVI · NDWI · NDBI)…")
+        st.write("🔬 Computing spectral indices…")
         ic = process_image(ic)
 
-        # ── Step 2b — Temporal NDVI from second image ─────────────────────────
-        if path_t2 and getattr(ic, 'image_array_t2', None) is not None:
+        # ── Step 2b — Temporal NDVI ───────────────────────────────────────────
+        if path_t2 and getattr(ic, "image_array_t2", None) is not None:
             st.write("📅 Computing temporal NDVI delta…")
             from geospatial_platform.image_processor import (
                 compute_ndvi, detect_sensor, BAND_CONFIG,
@@ -515,9 +551,8 @@ try:
             config2 = BAND_CONFIG[sensor2]
             pre2    = is_prescaled(arr2)
 
-            # New API: compute_ndvi(red, nir) — extract bands first
-            red2  = get_band(arr2, config2, "red")
-            nir2  = get_band(arr2, config2, "nir")
+            red2 = get_band(arr2, config2, "red")
+            nir2 = get_band(arr2, config2, "nir")
             if red2 is not None and nir2 is not None:
                 red2 = normalize_to_reflectance(red2, pre2)
                 nir2 = normalize_to_reflectance(nir2, pre2)
@@ -526,20 +561,23 @@ try:
             if ndvi_t2 is not None and not np.all(np.isnan(ndvi_t2)):
                 mean_t1 = float(np.nanmean(ic.ndvi)) if ic.ndvi is not None else None
                 mean_t2 = float(np.nanmean(ndvi_t2))
-                ic.ndvi_mean_t1   = mean_t1
-                ic.ndvi_mean_t2   = mean_t2
-                ic.ndvi_delta     = round(mean_t2 - mean_t1, 4) if mean_t1 is not None else None
+                ic.ndvi_mean_t1 = mean_t1
+                ic.ndvi_mean_t2 = mean_t2
+                ic.ndvi_delta   = round(mean_t2 - mean_t1, 4) if mean_t1 is not None else None
 
-                # Extract year labels from filenames (e.g. "2010_nabeul.tif" → "2010")
-                import re as _re
                 def _year_from_name(fname):
-                    m = _re.search(r'(19|20)\d{2}', fname or '')
+                    m = re.search(r'(19|20)\d{2}', fname or '')
                     return m.group(0) if m else None
 
-                ic.temporal_label_t1 = _year_from_name(uploaded_t1.name) or "Image 1 (earlier)"
-                ic.temporal_label_t2 = _year_from_name(uploaded_t2.name) or "Image 2 (later)"
+                ic.temporal_label_t1 = (
+                    _year_from_name(uploaded_t1.name) if uploaded_t1 else
+                    str(gee_params["year1"]) if gee_params else "Image 1"
+                )
+                ic.temporal_label_t2 = (
+                    _year_from_name(uploaded_t2.name) if uploaded_t2 else
+                    str(gee_params["year2"]) if gee_params else "Image 2"
+                )
 
-                # Flag vegetation change anomaly
                 if ic.ndvi_delta is not None and abs(ic.ndvi_delta) > 0.05:
                     direction = "improvement" if ic.ndvi_delta > 0 else "decline"
                     ic.anomalies = list(ic.anomalies or [])
@@ -547,33 +585,35 @@ try:
                         f"vegetation {direction} detected (ΔNDVI={ic.ndvi_delta:+.3f})"
                     )
 
-        # ── Step 3 — ViT feature extraction ──────────────────────────────────
+        # ── Step 3 — ViT ──────────────────────────────────────────────────────
         st.write("🧠 Extracting Vision Transformer features…")
         ic = extract_vit_features(ic)
 
-        # ── Step 4 — Climate data integration ─────────────────────────────────
+        # ── Step 4 — Climate ──────────────────────────────────────────────────
         if path_csv:
             st.write("📊 Integrating uploaded climate CSV…")
             try:
                 ic = integrate_data(ic)
-                df = getattr(ic, 'csv_df', None)
-                if df is not None:
+                df = getattr(ic, "csv_df", None)
+                if df is not None and build_climate_summary:
                     ic.climate_summary = build_climate_summary(df)
-                    populate_convenience_fields(ic)
-                else:
-                    pipeline_warnings.append("Climate DataFrame not found after integration.")
+                    if populate_convenience_fields:
+                        populate_convenience_fields(ic)
             except Exception as e:
                 pipeline_warnings.append(f"Climate integration failed: {e}")
 
         elif climate_mode == "Auto-fetch (NASA POWER)":
-            # Feature 4: NASA POWER auto-fetch using geocoded coordinates
             st.write("🌍 Auto-fetching climate data from NASA POWER…")
             try:
                 from climate_fetcher import fetch_nasa_power, climate_data_quality_report
-                fetch_lat = (gee_params["lat"] if gee_params
-                             else _extract_lat_from_meta(ic.image_meta))
-                fetch_lon = (gee_params["lon"] if gee_params
-                             else _extract_lon_from_meta(ic.image_meta))
+                fetch_lat = (
+                    gee_params["lat"] if gee_params
+                    else _extract_lat_from_meta(ic.image_meta)
+                )
+                fetch_lon = (
+                    gee_params["lon"] if gee_params
+                    else _extract_lon_from_meta(ic.image_meta)
+                )
                 if fetch_lat is not None and fetch_lon is not None:
                     climate_df = fetch_nasa_power(fetch_lat, fetch_lon)
                     if climate_df is not None:
@@ -585,18 +625,18 @@ try:
                             )
                         ic.csv_df = climate_df
                         ic = integrate_data(ic)
-                        ic.climate_summary = build_climate_summary(ic.csv_df)
-                        populate_convenience_fields(ic)
-                        st.write(f"  ✓ {qr['n_years']} years of climate data fetched automatically")
+                        if build_climate_summary:
+                            ic.climate_summary = build_climate_summary(ic.csv_df)
+                        if populate_convenience_fields:
+                            populate_convenience_fields(ic)
+                        st.write(f"  ✓ {qr['n_years']} years of climate data fetched")
                     else:
                         pipeline_warnings.append(
-                            "NASA POWER returned no data for these coordinates — "
-                            "try uploading a CSV manually."
+                            "NASA POWER returned no data — try uploading a CSV manually."
                         )
                 else:
                     pipeline_warnings.append(
-                        "Could not determine coordinates for NASA POWER fetch. "
-                        "Upload a climate CSV manually."
+                        "Could not determine coordinates for NASA POWER fetch."
                     )
             except Exception as e:
                 pipeline_warnings.append(f"NASA POWER auto-fetch failed: {e}")
@@ -606,11 +646,10 @@ try:
         # ── Step 5 — RAG ──────────────────────────────────────────────────────
         st.write("📚 Retrieving environmental context (RAG)…")
         ic = retrieve_context(ic)
-        # Normalise RAG field name — support both ic.rag_context and ic.retrieved_context
-        if not getattr(ic, 'rag_context', None):
-            ic.rag_context = getattr(ic, 'retrieved_context', '') or ''
+        if not getattr(ic, "rag_context", None):
+            ic.rag_context = getattr(ic, "retrieved_context", "") or ""
 
-        # ── Feature 5: Multi-year NDVI time series ───────────────────────────
+        # ── Step 5b — NDVI time series ────────────────────────────────────────
         ic.ndvi_timeseries  = None
         ic.ndvi_trend_stats = None
         if fetch_timeseries:
@@ -622,10 +661,14 @@ try:
                 )
                 from gee_connector import init_gee
                 if init_gee():
-                    ts_lat = (gee_params["lat"] if gee_params
-                              else _extract_lat_from_meta(ic.image_meta))
-                    ts_lon = (gee_params["lon"] if gee_params
-                              else _extract_lon_from_meta(ic.image_meta))
+                    ts_lat = (
+                        gee_params["lat"] if gee_params
+                        else _extract_lat_from_meta(ic.image_meta)
+                    )
+                    ts_lon = (
+                        gee_params["lon"] if gee_params
+                        else _extract_lon_from_meta(ic.image_meta)
+                    )
                     if ts_lat and ts_lon:
                         m_start, m_end = estimate_growing_season_months(
                             ts_lat, ic.aridity_index
@@ -640,17 +683,16 @@ try:
                             ic.ndvi_trend_stats = compute_trend(ts_df)
                             st.write(f"  ✓ {len(ts_df)} years of NDVI data fetched")
                         else:
-                            pipeline_warnings.append("NDVI time series fetch returned no data.")
+                            pipeline_warnings.append("NDVI time series returned no data.")
                     else:
-                        pipeline_warnings.append("Coordinates not available for time series fetch.")
+                        pipeline_warnings.append("Coordinates not available for time series.")
                 else:
                     pipeline_warnings.append("GEE not initialised — time series skipped.")
             except Exception as e:
                 pipeline_warnings.append(f"Time series fetch failed: {e}")
 
-        # ── Patch derived fields before report generation ─────────────────────
-        # Ensure mean index values exist (image_processor may store as ic.ndvi, not ic.ndvi_mean)
-        for attr in ('ndvi', 'ndwi', 'ndbi'):
+        # ── Patch derived fields ──────────────────────────────────────────────
+        for attr in ("ndvi", "ndwi", "ndbi"):
             arr = getattr(ic, attr, None)
             mean_attr = f"{attr}_mean"
             map_attr  = f"{attr}_map"
@@ -658,34 +700,37 @@ try:
                 setattr(ic, mean_attr, float(np.nanmean(arr)))
                 setattr(ic, map_attr,  arr)
 
-        # Ensure region / ecosystem set from image_meta if not already
-        if not getattr(ic, 'region', None):
+        if not getattr(ic, "region", None):
             ic.region = ic.image_meta.get("region_name", "Unknown region")
-        if not getattr(ic, 'ecosystem', None):
+        if not getattr(ic, "ecosystem", None):
             ic.ecosystem = ic.image_meta.get("ecosystem", "Mixed landscape")
 
         # ── Confidence score ──────────────────────────────────────────────────
         if ic.confidence_score is None:
             score = 0.0
-            if ic.ndvi is not None:           score += 20
-            if ic.ndwi is not None:           score += 15
-            if ic.ndbi is not None:           score += 10
-            if ic.aridity_index is not None:  score += 10
-            if getattr(ic, 'csv_df', None) is not None: score += 20
-            if ic.ndvi_delta is not None:     score += 15
+            if ic.ndvi is not None:                       score += 20
+            if ic.ndwi is not None:                       score += 15
+            if ic.ndbi is not None:                       score += 10
+            if ic.aridity_index is not None:              score += 10
+            if getattr(ic, "csv_df", None) is not None:  score += 20
+            if ic.ndvi_delta is not None:                 score += 15
             ic.confidence_score = min(85.0, score)
 
-        # ── Step 6 — Report generation ────────────────────────────────────────
+        # ── Step 6 — Report ───────────────────────────────────────────────────
         st.write("✍️ Generating scientific report…")
         ic.report = generate_report(ic, ic.rag_context or "", ic.anomalies or [])
 
     status.update(label="✅ Analysis complete", state="complete", expanded=False)
 
+    # Show pipeline warnings
+    for w in pipeline_warnings:
+        st.warning(w)
+
 except Exception as e:
     status.update(label="❌ Pipeline error", state="error", expanded=True)
     st.markdown(f"""
     <div class="geo-card geo-card-error">
-        <strong>Pipeline failed at runtime:</strong><br><br>
+        <strong>Pipeline failed:</strong><br><br>
         <code style="font-size:0.78rem;">{type(e).__name__}: {e}</code>
     </div>
     """, unsafe_allow_html=True)
@@ -694,8 +739,10 @@ except Exception as e:
 
 finally:
     for p in temp_files:
-        try: os.unlink(p)
-        except: pass
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -710,10 +757,10 @@ tab_overview, tab_maps, tab_report = st.tabs([
 # ── TAB 1 — OVERVIEW ─────────────────────────────────────────────────────────
 
 with tab_overview:
-    region_str   = getattr(ic, 'region', None) or ic.image_meta.get("region_name", "Unknown region")
-    eco_str      = getattr(ic, 'ecosystem', None) or "—"
-    t1_label     = getattr(ic, 'temporal_label_t1', None)
-    t2_label     = getattr(ic, 'temporal_label_t2', None)
+    region_str   = getattr(ic, "region", None) or ic.image_meta.get("region_name", "Unknown region")
+    eco_str      = getattr(ic, "ecosystem", None) or "—"
+    t1_label     = getattr(ic, "temporal_label_t1", None)
+    t2_label     = getattr(ic, "temporal_label_t2", None)
     temporal_str = f"{t1_label} → {t2_label}" if t1_label and t2_label else "Single image"
 
     st.markdown(f"""
@@ -736,11 +783,11 @@ with tab_overview:
 
     with col1:
         st.markdown("## Spectral Indices")
-        ndvi  = getattr(ic, 'ndvi_mean', None)
-        ndwi  = getattr(ic, 'ndwi_mean', None)
-        ndbi  = getattr(ic, 'ndbi_mean', None)
-        ai    = getattr(ic, 'aridity_index', None)
-        delta = getattr(ic, 'ndvi_delta', None)
+        ndvi  = getattr(ic, "ndvi_mean", None)
+        ndwi  = getattr(ic, "ndwi_mean", None)
+        ndbi  = getattr(ic, "ndbi_mean", None)
+        ai    = getattr(ic, "aridity_index", None)
+        delta = getattr(ic, "ndvi_delta", None)
 
         chips = ""
         if ndvi  is not None: chips += f'<div class="metric-chip">NDVI<span>{ndvi:.3f}</span></div>'
@@ -748,17 +795,17 @@ with tab_overview:
         if ndbi  is not None: chips += f'<div class="metric-chip">NDBI<span>{ndbi:.3f}</span></div>'
         if ai    is not None: chips += f'<div class="metric-chip">Aridity<span>{ai:.3f}</span></div>'
         if delta is not None:
-            sign  = "+" if delta >= 0 else ""
+            sign   = "+" if delta >= 0 else ""
             dcolor = "#16a34a" if delta >= 0 else "#dc2626"
             chips += f'<div class="metric-chip">ΔNDVI<span style="color:{dcolor}">{sign}{delta:.3f}</span></div>'
         st.markdown(f'<div class="metric-row">{chips}</div>', unsafe_allow_html=True)
 
-        land_cover = getattr(ic, 'land_cover', None)
+        land_cover = getattr(ic, "land_cover", None)
         if land_cover:
             st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:1.05rem;font-weight:600;color:#2563eb;border-bottom:1px solid #dde3ed;padding-bottom:0.4rem;margin:1rem 0 0.6rem 0;">Land Cover</div>', unsafe_allow_html=True)
             st.markdown(render_land_cover_bar(land_cover), unsafe_allow_html=True)
-            lc_cols = st.columns(4)
-            lc_colors = {"water":"#3b82f6","vegetation":"#22c55e","urban":"#f59e0b","barren":"#94a3b8"}
+            lc_cols   = st.columns(4)
+            lc_colors = {"water": "#3b82f6", "vegetation": "#22c55e", "urban": "#f59e0b", "barren": "#94a3b8"}
             for i, (cls, pct) in enumerate(land_cover.items()):
                 with lc_cols[i % 4]:
                     c = lc_colors.get(cls, "#94a3b8")
@@ -770,7 +817,7 @@ with tab_overview:
                     </div>
                     """, unsafe_allow_html=True)
 
-        anomalies = getattr(ic, 'anomalies', None)
+        anomalies = getattr(ic, "anomalies", None)
         if anomalies:
             st.markdown("## Detected Anomalies")
             tags = "".join(f'<span class="anomaly-tag">⚠ {a}</span>' for a in anomalies)
@@ -778,7 +825,7 @@ with tab_overview:
 
     with col2:
         st.markdown("## Confidence Score")
-        score = getattr(ic, 'confidence_score', None) or 0
+        score       = getattr(ic, "confidence_score", None) or 0
         label_color = "#16a34a" if score >= 75 else "#d97706" if score >= 55 else "#dc2626"
         label_text  = "High" if score >= 75 else "Moderate" if score >= 55 else "Low"
         st.markdown(f"""
@@ -794,11 +841,11 @@ with tab_overview:
         st.markdown("## Image Metadata")
         meta = ic.image_meta
         meta_items = [
-            ("Format",     getattr(ic, 'image_format', '—')),
-            ("Bands",      str(getattr(ic, 'n_bands', '—'))),
+            ("Format",     getattr(ic, "image_format", "—")),
+            ("Bands",      str(getattr(ic, "n_bands", "—"))),
             ("Dimensions", f"{meta.get('width','?')} × {meta.get('height','?')} px"),
-            ("CRS",        meta.get('crs', '—')),
-            ("Context",    meta.get('region_context', '—')),
+            ("CRS",        meta.get("crs", "—")),
+            ("Context",    meta.get("region_context", "—")),
         ]
         rows = "".join(f"""
         <div class="meta-row">
@@ -807,15 +854,15 @@ with tab_overview:
         </div>""" for k, v in meta_items)
         st.markdown(f'<div class="geo-card">{rows}</div>', unsafe_allow_html=True)
 
-        climate_summary = getattr(ic, 'climate_summary', None)
+        climate_summary = getattr(ic, "climate_summary", None)
         if climate_summary:
             st.markdown("## Climate Snapshot")
             cs = climate_summary
             pairs = [
-                ("Rainfall (latest)", f"{cs.get('rainfall_mm_latest',0):.1f} mm"),
-                ("Rainfall trend",    cs.get('rainfall_mm_trend','—').capitalize()),
-                ("Temperature",       f"{cs.get('temperature_c_latest',0):.1f} °C"),
-                ("Humidity",          f"{cs.get('humidity_pct_latest',0):.1f} %"),
+                ("Rainfall (latest)", f"{cs.get('rainfall_mm_latest', 0):.1f} mm"),
+                ("Rainfall trend",    cs.get("rainfall_mm_trend", "—").capitalize()),
+                ("Temperature",       f"{cs.get('temperature_c_latest', 0):.1f} °C"),
+                ("Humidity",          f"{cs.get('humidity_pct_latest', 0):.1f} %"),
             ]
             rows = "".join(f"""
             <div class="meta-row">
@@ -826,7 +873,7 @@ with tab_overview:
         else:
             st.markdown("""
             <div class="geo-card" style="text-align:center;color:#9ca3af;font-size:0.8rem;padding:1.5rem;">
-                No climate CSV uploaded.
+                No climate data uploaded.
             </div>
             """, unsafe_allow_html=True)
 
@@ -835,9 +882,9 @@ with tab_overview:
 
 with tab_maps:
     st.markdown("## Spectral Index Maps")
-    ndvi_map = getattr(ic, 'ndvi_map', None)
-    ndwi_map = getattr(ic, 'ndwi_map', None)
-    ndbi_map = getattr(ic, 'ndbi_map', None)
+    ndvi_map = getattr(ic, "ndvi_map", None)
+    ndwi_map = getattr(ic, "ndwi_map", None)
+    ndbi_map = getattr(ic, "ndbi_map", None)
 
     available = [
         (ndvi_map, "NDVI — Vegetation Density", "RdYlGn"),
@@ -856,9 +903,9 @@ with tab_maps:
                 st.pyplot(fig, use_container_width=True)
                 plt.close(fig)
 
-    ndvi_delta = getattr(ic, 'ndvi_delta', None)
-    ndvi_t1    = getattr(ic, 'ndvi_mean_t1', None)
-    ndvi_t2    = getattr(ic, 'ndvi_mean_t2', None)
+    ndvi_delta = getattr(ic, "ndvi_delta", None)
+    ndvi_t1    = getattr(ic, "ndvi_mean_t1", None)
+    ndvi_t2    = getattr(ic, "ndvi_mean_t2", None)
     if ndvi_delta is not None and ndvi_t1 is not None and ndvi_t2 is not None:
         st.markdown("## Temporal NDVI Comparison")
         card_cls    = "geo-card-good" if ndvi_delta >= 0 else "geo-card-error"
@@ -880,42 +927,33 @@ with tab_maps:
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Feature 2: ΔNDVI Change Detection Map ────────────────────────────────
-    delta_map = getattr(ic, 'ndvi_trend_map', None)
+    delta_map = getattr(ic, "ndvi_trend_map", None)
     if delta_map is not None:
         st.markdown("## ΔNDVI Spatial Change Map")
-        st.markdown("""
-        <div style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">
-            Green = vegetation gain · Red = vegetation loss · Grey = no change
-        </div>""", unsafe_allow_html=True)
+        st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">Green = vegetation gain · Red = vegetation loss</div>', unsafe_allow_html=True)
         fig_delta = render_index_map(delta_map, "ΔNDVI Change Map (pixel-wise)", "RdYlGn")
         st.pyplot(fig_delta, use_container_width=True)
         plt.close(fig_delta)
 
-    # ── Feature 5: Multi-year NDVI Time Series ───────────────────────────────
-    ts_df    = getattr(ic, 'ndvi_timeseries', None)
-    ts_trend = getattr(ic, 'ndvi_trend_stats', None)
+    ts_df    = getattr(ic, "ndvi_timeseries", None)
+    ts_trend = getattr(ic, "ndvi_trend_stats", None)
     if ts_df is not None and len(ts_df) > 1:
         st.markdown("## NDVI Time Series (Annual)")
         try:
             from time_series import render_time_series_chart
             fig_ts = render_time_series_chart(
                 ts_df, ts_trend or {},
-                ecosystem=getattr(ic, 'ecosystem', '') or ''
+                ecosystem=getattr(ic, "ecosystem", "") or ""
             )
             st.pyplot(fig_ts, use_container_width=True)
             plt.close(fig_ts)
-
-            # Summary stats below chart
             if ts_trend:
                 trend_color = "#16a34a" if (ts_trend.get("slope") or 0) > 0 else "#dc2626"
                 st.markdown(f"""
                 <div class="metric-row">
                     <div class="metric-chip">Trend<span>{ts_trend.get('trend','—')}</span></div>
-                    <div class="metric-chip">Rate<span style="color:{trend_color}">
-                        {ts_trend.get('annual_rate',0):+.4f}/yr</span></div>
-                    <div class="metric-chip">Total Δ<span style="color:{trend_color}">
-                        {ts_trend.get('total_change',0):+.3f}</span></div>
+                    <div class="metric-chip">Rate<span style="color:{trend_color}">{ts_trend.get('annual_rate',0):+.4f}/yr</span></div>
+                    <div class="metric-chip">Total Δ<span style="color:{trend_color}">{ts_trend.get('total_change',0):+.3f}</span></div>
                     <div class="metric-chip">R²<span>{ts_trend.get('r2',0):.2f}</span></div>
                 </div>""", unsafe_allow_html=True)
         except Exception as e:
@@ -925,27 +963,21 @@ with tab_maps:
 # ── TAB 3 — FULL REPORT ──────────────────────────────────────────────────────
 
 with tab_report:
-    report = getattr(ic, 'report', None)
+    report = getattr(ic, "report", None)
     if not report:
         st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">Report not generated.</div>', unsafe_allow_html=True)
     else:
-        # Find where the actual content starts (first ## section heading)
-        # This bypasses any repeated headers the LLM may have generated
-        first_section = report.find('## 1.')
+        first_section = report.find("## 1.")
         if first_section == -1:
-            first_section = report.find('## ')
-        if first_section != -1:
-            report_body = report[first_section:]
-        else:
-            report_body = report
+            first_section = report.find("## ")
+        report_body = report[first_section:] if first_section != -1 else report
 
-        # Strip footer (Confidence line and everything after)
         footer_match = re.search(r'\n={10,}\s*\nConfidence:', report_body)
         if footer_match:
             report_body = report_body[:footer_match.start()].strip()
         else:
-            # Fallback: strip trailing === blocks
             report_body = re.sub(r'\n={10,}.*$', '', report_body, flags=re.DOTALL).strip()
+
         sections = parse_report_sections(report_body)
         if sections:
             for title, content in sections.items():
@@ -959,6 +991,6 @@ with tab_report:
             st.download_button(
                 label="⬇ Download Report (.txt)",
                 data=report,
-                file_name=f"geointel_{region_str.replace(' ','_').replace(',','')}.txt",
+                file_name=f"geointel_{region_str.replace(' ', '_').replace(',', '')}.txt",
                 mime="text/plain",
             )
