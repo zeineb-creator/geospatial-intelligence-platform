@@ -19,64 +19,19 @@ import os
 # ─────────────────────────────────────────────
 
 def init_gee():
-    """Robust Google Earth Engine initialization."""
-
     import ee
 
-    # ─────────────────────────────
-    # 1. Try default initialization (local cached auth)
-    # ─────────────────────────────
+    # 1. Try default (rarely works on Streamlit)
     try:
         ee.Initialize()
-        print("[GEE] Initialized with default credentials")
+        print("[GEE] Default init OK")
         return True
-
     except Exception as e:
-        print(f"[GEE] Default init failed: {e}")
+        print("[GEE] Default init failed:", e)
 
-    # ─────────────────────────────
-    # 2. Try interactive authentication (local dev only)
-    # ─────────────────────────────
-    try:
-        print("[GEE] Trying interactive authentication...")
-        ee.Authenticate()   # opens browser once
-        ee.Initialize()
-        print("[GEE] Initialized after authentication")
-        return True
-
-    except Exception as e:
-        print(f"[GEE] Interactive auth failed: {e}")
-
-    # ─────────────────────────────
-    # 3. Try Streamlit / service account
-    # ─────────────────────────────
-    try:
-        import os
-
-        if "GEE_SERVICE_ACCOUNT" in os.environ:
-            import json
-            from oauth2client.service_account import ServiceAccountCredentials
-
-            sa_info = json.loads(os.environ["GEE_SERVICE_ACCOUNT"])
-
-            credentials = ServiceAccountCredentials(
-                sa_info["client_email"],
-                key_data=sa_info["private_key"]
-            )
-
-            ee.Initialize(credentials)
-            print("[GEE] Initialized with service account (env)")
-            return True
-
-    except Exception as e:
-        print(f"[GEE] Service account init failed: {e}")
-
-    # ─────────────────────────────
-    # 4. Streamlit secrets fallback
-    # ─────────────────────────────
+    # 2. Streamlit secrets (MAIN METHOD)
     try:
         import streamlit as st
-        import json
         from oauth2client.service_account import ServiceAccountCredentials
 
         sa = st.secrets["GEE_SERVICE_ACCOUNT"]
@@ -87,13 +42,14 @@ def init_gee():
         )
 
         ee.Initialize(credentials)
-        print("[GEE] Initialized with Streamlit secrets service account")
+
+        print("[GEE] Service account init OK")
         return True
 
     except Exception as e:
-        print(f"[GEE] Streamlit service account failed: {e}")
+        print("[GEE] Service account init failed:", e)
 
-    print("[GEE] ❌ All initialization methods failed")
+    print("[GEE] ❌ INIT FAILED")
     return False
 
 
