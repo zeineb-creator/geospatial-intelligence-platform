@@ -414,88 +414,87 @@ try:
 
         # ── GEE fetch ─────────────────────────────────────────────────────────
         path_t1 = path_t2 = path_csv = None
-
+        
+        # In app.py, replace the GEE fetch section with:
+        
         if gee_params:
             st.write("🛰️ Fetching imagery from Google Earth Engine…")
             try:
                 from gee_connector import (
-                    init_gee, fetch_and_save, auto_select_sensor, SENSOR_CONFIGS
+                    init_gee, fetch_image_as_array, fetch_preview_only,
+                    auto_sensor, SENSOR_CONFIGS
                 )
-                import ee
-
+                
                 if init_gee():
                     st.write("✅ GEE initialized")
-
-                    sensor1 = gee_params.get("sensor") or auto_select_sensor(gee_params["year1"])
-                    st.write(f"Sensor: {sensor1} | Year: {gee_params['year1']} | "
-                             f"Lat: {gee_params['lat']:.4f} | Lon: {gee_params['lon']:.4f}")
-
-                    # Scene count check
-                    try:
-                        point = ee.Geometry.Point([gee_params["lon"], gee_params["lat"]])
-                        aoi   = point.buffer(gee_params["buffer_km"] * 1000).bounds()
-                        cfg   = SENSOR_CONFIGS[sensor1]
-                        # Scene count check — use full year and relaxed cloud cover
-                        col = (
-                            ee.ImageCollection(cfg["collection"])
-                            .filterBounds(aoi)
-                            .filterDate(
-                                f"{gee_params['year1']}-01-01",
-                                f"{gee_params['year1']}-12-31"
-                            )
-                            .filter(ee.Filter.lt(cfg["cloud_prop"], 50))   # relaxed for count check only
-                        )
-                        count = col.size().getInfo()
-                        st.write(f"📡 Scenes available for Year 1 (cloud<50%): {count}")
-                        if count == 0:
-                            st.error(
-                                "❌ No satellite scenes found at all for these coordinates and year. "
-                                "Try a different year or larger buffer radius."
-                            )
-                            st.stop()
-                    except Exception as debug_e:
-                        st.warning(f"Scene count check failed: {debug_e}")
-
-                    # Fetch image 1
-                    path_t1 = fetch_and_save(
+                    
+                    # First check if there are scenes
+                    from gee_connector import get_best_image
+                    sensor1 = gee_params.get("sensor") or auto_sensor(gee_params["year1"])
+                    
+                    st.write(f"Checking for scenes: {sensor1} at {gee_params['year1']}")
+                    
+                    # Quick preview (no download, just check availability)
+                    preview_url, preview_meta = fetch_preview_only(
                         lat=gee_params["lat"],
                         lon=gee_params["lon"],
                         year=gee_params["year1"],
                         sensor=sensor1,
                         buffer_km=gee_params["buffer_km"],
                     )
-                    if path_t1:
-                        temp_files.append(path_t1)
-                        st.write(f"  ✓ Image 1 ({gee_params['year1']}) fetched")
-                    else:
-                        st.error(
-                            "❌ GEE Image 1 fetch failed. "
-                            "Check Streamlit logs for the full traceback."
-                        )
+                    
+                    if preview_url is None:
+                        st.error("❌ No satellite scenes found for these coordinates and year.")
                         st.stop()
-
-                    # Fetch image 2
+                    
+                    st.write(f"  ✓ Found scenes for Year 1")
+                    
+                    # Now download the actual data for processing
+                    st.write(f"  Downloading image data for {gee_params['year1']}...")
+                    result = fetch_image_as_array(
+                        lat=gee_params["lat"],
+                        lon=gee_params["lon"],
+                        year=gee_params["year1"],
+                        sensor=sensor1,
+                        buffer_km=gee_params["buffer_km"],
+                    )
+                    
+                    if result:
+                        array_t1, meta_t1 = result
+                        path_t1 = tempfile.NamedTemporaryFile(delete=False, suffix=".tif").name
+                        from gee_connector import save_array_to_geotiff
+                        path_t1 = save_array_to_geotiff(array_t1, meta_t1, path_t1)
+                        temp_files.append(path_t1)
+                        st.write(f"  ✓ Image 1 ({gee_params['year1']}) downloaded")
+                    else:
+                        st.error("❌ Failed to download image data")
+                        st.stop()
+                    
+                    # Fetch second year if different
                     if gee_params["year2"] != gee_params["year1"]:
-                        sensor2 = gee_params.get("sensor") or auto_select_sensor(gee_params["year2"])
-                        path_t2 = fetch_and_save(
+                        sensor2 = gee_params.get("sensor") or auto_sensor(gee_params["year2"])
+                        st.write(f"  Checking Year 2 ({gee_params['year2']})...")
+                        
+                        result2 = fetch_image_as_array(
                             lat=gee_params["lat"],
                             lon=gee_params["lon"],
                             year=gee_params["year2"],
                             sensor=sensor2,
                             buffer_km=gee_params["buffer_km"],
                         )
-                        if path_t2:
+                        
+                        if result2:
+                            array_t2, meta_t2 = result2
+                            path_t2 = tempfile.NamedTemporaryFile(delete=False, suffix=".tif").name
+                            path_t2 = save_array_to_geotiff(array_t2, meta_t2, path_t2)
                             temp_files.append(path_t2)
-                            st.write(f"  ✓ Image 2 ({gee_params['year2']}) fetched")
+                            st.write(f"  ✓ Image 2 ({gee_params['year2']}) downloaded")
                         else:
-                            pipeline_warnings.append(
-                                "GEE Image 2 fetch failed — temporal analysis skipped."
-                            )
-
+                            st.warning("⚠️ Could not fetch second year image")
                 else:
-                    st.error("❌ GEE initialisation failed. Check GEE_SERVICE_ACCOUNT secrets.")
+                    st.error("❌ GEE initialisation failed")
                     st.stop()
-
+                    
             except Exception as e:
                 import traceback
                 st.error(f"❌ GEE error: {e}")
