@@ -1,16 +1,16 @@
 """
 gee_connector.py — Optimized Google Earth Engine connector
 ===========================================================
-Fast preview-based streaming (thumb tiles) + geemap integration
+Fast preview + actual data download when needed
 """
 
 import ee
 import numpy as np
-import time
-import json
-
-# Optional but recommended
-import geemap.foliumap as geemap
+import tempfile
+import io
+import zipfile
+import requests
+import os
 
 
 # ─────────────────────────────────────────────
@@ -28,7 +28,7 @@ def init_gee():
 
 
 # ─────────────────────────────────────────────
-# SENSOR CONFIGS (FIXED SCALING)
+# SENSOR CONFIGS
 # ─────────────────────────────────────────────
 
 SENSOR_CONFIGS = {
@@ -36,24 +36,25 @@ SENSOR_CONFIGS = {
         "collection": "COPERNICUS/S2_SR_HARMONIZED",
         "bands": ["B4", "B3", "B2", "B8"],  # RGB + NIR
         "scale": 0.0001,
+        "resolution": 10,
         "cloud": "CLOUDY_PIXEL_PERCENTAGE",
         "start": 2017,
     },
-
     "Landsat 8/9": {
         "collection": "LANDSAT/LC08/C02/T1_L2",
         "bands": ["SR_B4", "SR_B3", "SR_B2", "SR_B5"],
         "scale": 0.0000275,
         "offset": -0.2,
+        "resolution": 30,
         "cloud": "CLOUD_COVER",
         "start": 2013,
     },
-
     "Landsat 7": {
         "collection": "LANDSAT/LE07/C02/T1_L2",
         "bands": ["SR_B3", "SR_B2", "SR_B1", "SR_B4"],
         "scale": 0.0000275,
         "offset": -0.2,
+        "resolution": 30,
         "cloud": "CLOUD_COVER",
         "start": 1999,
     }
@@ -77,10 +78,10 @@ def aoi(lon, lat, km):
 
 
 # ─────────────────────────────────────────────
-# COLLECTION BUILDER (IMPROVED)
+# COLLECTION BUILDER
 # ─────────────────────────────────────────────
 
-def build_collection(cfg, aoi_geom, year):
+def build_collection(cfg, aoi_geom, year, cloud_max=80):
     start = f"{year}-01-01"
     end = f"{year+1}-01-01"
 
@@ -88,118 +89,245 @@ def build_collection(cfg, aoi_geom, year):
         ee.ImageCollection(cfg["collection"])
         .filterBounds(aoi_geom)
         .filterDate(start, end)
-        .sort("CLOUDY_PIXEL_PERCENTAGE")   # ✅ requested improvement
+        .filter(ee.Filter.lt(cfg["cloud"], cloud_max))
     )
-
-    # fallback cloud handling
-    col = col.filter(ee.Filter.lt(cfg["cloud"], 80))
-
+    
     return col.select(cfg["bands"])
 
 
 # ─────────────────────────────────────────────
-# SCALING (FIXED LANDSAT)
+# SCALING
 # ─────────────────────────────────────────────
 
 def apply_scaling(img, cfg):
     img = img.multiply(cfg["scale"])
-
-    # Landsat offset fix
     if "offset" in cfg:
         img = img.add(cfg["offset"])
-
     return img
 
 
 # ─────────────────────────────────────────────
-# FAST THUMB STREAM (REPLACES DOWNLOAD)
+# GET BEST IMAGE (LOWEST CLOUD COVER)
 # ─────────────────────────────────────────────
 
-def get_thumb(image, region, scale=30):
-    """
-    Much faster than getDownloadURL.
-    Returns a PNG preview URL (streamable).
-    """
+def get_best_image(lat, lon, year, buffer_km=5, sensor=None):
+    """Get the least cloudy image for the location/year."""
+    sensor = sensor or auto_sensor(year)
+    cfg = SENSOR_CONFIGS[sensor]
+    
+    region = aoi(lon, lat, buffer_km)
+    
+    # Try with strict cloud filter first, then relax
+    for cloud_max in [30, 60, 80]:
+        col = build_collection(cfg, region, year, cloud_max=cloud_max)
+        count = col.size().getInfo()
+        if count > 0:
+            print(f"[GEE] Found {count} scenes with cloud < {cloud_max}%")
+            # Get the least cloudy image
+            image = col.sort(cfg["cloud"]).first()
+            return image, cfg, region
+    
+    print(f"[GEE] No scenes found for {sensor} {year}")
+    return None, None, None
 
+
+# ─────────────────────────────────────────────
+# FAST PREVIEW URL (FOR UI)
+# ─────────────────────────────────────────────
+
+def get_preview_url(image, region, vis_params=None):
+    """Get a fast preview URL for the image."""
+    if vis_params is None:
+        vis_params = {
+            "min": 0,
+            "max": 0.3,
+            "bands": ["B4", "B3", "B2"]  # RGB
+        }
+    
     params = {
-        "region": region,
+        "region": region.getInfo(),
         "dimensions": 1024,
-        "format": "png",
-        "min": 0,
-        "max": 0.3,
-        "bands": None
+        "format": "png"
     }
-
+    params.update(vis_params)
+    
     return image.getThumbURL(params)
 
 
 # ─────────────────────────────────────────────
-# MAIN FETCH (OPTIMIZED PIPELINE)
+# DOWNLOAD ACTUAL DATA (WHEN NEEDED)
 # ─────────────────────────────────────────────
 
-def fetch_image_preview(lat, lon, year, buffer_km=5, sensor=None):
-    sensor = sensor or auto_sensor(year)
-    cfg = SENSOR_CONFIGS[sensor]
-
-    print(f"[GEE] Sensor={sensor}, Year={year}")
-
-    region = aoi(lon, lat, buffer_km)
-
-    # collection
-    col = build_collection(cfg, region, year)
-
-    count = col.size().getInfo()
-    print("[GEE] Scenes:", count)
-
-    if count == 0:
-        print("[GEE] No data")
+def download_image_as_array(image, region, cfg, scale=30):
+    """Download the actual image data as a numpy array."""
+    try:
+        # Get the region as GeoJSON
+        region_json = region.getInfo()
+        
+        # Build download parameters
+        params = {
+            "scale": scale,
+            "region": region_json,
+            "format": "GEO_TIFF",
+            "crs": "EPSG:4326",
+        }
+        
+        print(f"[GEE] Downloading at {scale}m resolution...")
+        url = image.getDownloadURL(params)
+        
+        # Download the file
+        response = requests.get(url, timeout=300)
+        
+        if response.status_code != 200:
+            print(f"[GEE] Download failed: HTTP {response.status_code}")
+            return None
+        
+        # Check if it's a zip file
+        if response.content[:2] != b'PK':
+            print("[GEE] Response is not a zip file")
+            return None
+        
+        # Process zip file
+        import rasterio
+        from rasterio.io import MemoryFile
+        
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            # Find the TIF file
+            tif_files = [f for f in z.namelist() if f.endswith('.tif')]
+            if not tif_files:
+                print("[GEE] No TIF files in zip")
+                return None
+            
+            # Read the first TIF (should contain all bands)
+            with z.open(tif_files[0]) as tif_file:
+                with MemoryFile(tif_file) as memfile:
+                    with memfile.open() as src:
+                        array = src.read().astype(np.float32)
+                        
+            # Apply scaling
+            array = array * cfg["scale"]
+            if "offset" in cfg:
+                array = array + cfg["offset"]
+            
+            array = np.clip(array, 0.0, 1.0)
+            print(f"[GEE] Downloaded array shape: {array.shape}")
+            return array
+            
+    except Exception as e:
+        print(f"[GEE] Download error: {e}")
         return None
 
-    # median composite + requested fix
-    image = col.sort("CLOUDY_PIXEL_PERCENTAGE").first()  # ✅ REQUIRED FIX
-
-    image = apply_scaling(image, cfg)
-
-    # clip
-    image = image.clip(region)
-
-    # FAST STREAMING PREVIEW
-    thumb_url = get_thumb(image, region.getInfo())
-
-    meta = {
-        "sensor": sensor,
-        "year": year,
-        "scenes": count,
-        "mode": "thumb_stream"
-    }
-
-    print("[GEE] Thumb URL ready")
-    return thumb_url, meta
-
 
 # ─────────────────────────────────────────────
-# GEEMAP VISUALIZATION (OPTIONAL UI)
+# MAIN FETCH FUNCTION (BALANCED)
 # ─────────────────────────────────────────────
 
-def create_map(lat, lon, year):
-    Map = geemap.Map(center=[lat, lon], zoom=10)
-
-    sensor = auto_sensor(year)
-    cfg = SENSOR_CONFIGS[sensor]
-
-    region = aoi(lon, lat, 5)
-    col = build_collection(cfg, region, year)
-
-    image = col.sort("CLOUDY_PIXEL_PERCENTAGE").first()
+def fetch_image_as_array(lat, lon, year, buffer_km=5.0, sensor=None):
+    """
+    Fetch the best available image as a numpy array.
+    Returns (array, meta) on success, None on failure.
+    """
+    # Get the best image
+    image, cfg, region = get_best_image(lat, lon, year, buffer_km, sensor)
+    
+    if image is None:
+        return None
+    
+    # Apply scaling and clip
     image = apply_scaling(image, cfg).clip(region)
-
-    vis = {
-        "bands": cfg["bands"][:3],
-        "min": 0,
-        "max": 0.3
+    
+    # Calculate optimal scale
+    side_m = buffer_km * 2 * 1000
+    optimal_scale = max(int(side_m / 400), cfg["resolution"])
+    optimal_scale = min(optimal_scale, 100)  # Cap at 100m for performance
+    
+    # Download the actual data
+    array = download_image_as_array(image, region, cfg, scale=optimal_scale)
+    
+    if array is None:
+        return None
+    
+    meta = {
+        "sensor": sensor or auto_sensor(year),
+        "year": year,
+        "source": "GEE",
+        "n_bands": array.shape[0],
+        "scale_used": optimal_scale,
     }
+    
+    return array, meta
 
-    Map.addLayer(image, vis, "Composite")
-    Map.addLayer(region, {}, "AOI")
 
-    return Map
+# ─────────────────────────────────────────────
+# CONVENIENCE: GET PREVIEW (NO DOWNLOAD)
+# ─────────────────────────────────────────────
+
+def fetch_preview_only(lat, lon, year, buffer_km=5.0, sensor=None):
+    """
+    Get only a preview URL (much faster, no download).
+    Returns (url, meta) on success.
+    """
+    image, cfg, region = get_best_image(lat, lon, year, buffer_km, sensor)
+    
+    if image is None:
+        return None, None
+    
+    image = apply_scaling(image, cfg).clip(region)
+    
+    vis_params = {
+        "min": 0,
+        "max": 0.3,
+        "bands": cfg["bands"][:3]  # RGB bands
+    }
+    
+    url = get_preview_url(image, region, vis_params)
+    
+    meta = {
+        "sensor": sensor or auto_sensor(year),
+        "year": year,
+        "mode": "preview"
+    }
+    
+    return url, meta
+
+
+# ─────────────────────────────────────────────
+# SAVE TO FILE
+# ─────────────────────────────────────────────
+
+def save_array_to_geotiff(array, meta, output_path):
+    """Save numpy array to GeoTIFF."""
+    try:
+        import rasterio
+        from rasterio.transform import from_origin
+        
+        transform = from_origin(0, 0, 1, 1)
+        
+        with rasterio.open(
+            output_path, 'w',
+            driver='GTiff',
+            height=array.shape[1],
+            width=array.shape[2],
+            count=array.shape[0],
+            dtype=np.float32,
+            crs='EPSG:4326',
+            transform=transform
+        ) as dst:
+            dst.write(array)
+        return output_path
+    except Exception as e:
+        print(f"[GEE] Save failed: {e}")
+        return None
+
+
+def fetch_and_save(lat, lon, year, buffer_km=5.0, sensor=None):
+    """Fetch image and save to temporary file."""
+    result = fetch_image_as_array(lat, lon, year, buffer_km, sensor)
+    if result is None:
+        return None
+    
+    array, meta = result
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp:
+        path = tmp.name
+    
+    return save_array_to_geotiff(array, meta, path)
