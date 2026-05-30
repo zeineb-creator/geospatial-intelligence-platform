@@ -10,7 +10,7 @@ import numpy as np
 
 
 # ─────────────────────────────────────────────────────────────
-# GEE INITIALISATION (FIXED)
+# GEE INITIALISATION
 # ─────────────────────────────────────────────────────────────
 
 def init_gee() -> bool:
@@ -22,19 +22,17 @@ def init_gee() -> bool:
 
     try:
         import streamlit as st
-        import json
 
         sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
         if not sa_info:
             print("[GEE] No GEE_SERVICE_ACCOUNT in secrets")
             return False
 
-        # Build a clean dict from secrets — handle AttrDict / proxy objects
         sa_dict = {
             "type":                        sa_info.get("type", "service_account"),
             "project_id":                  sa_info["project_id"],
             "private_key_id":              sa_info["private_key_id"],
-            "private_key":                 sa_info["private_key"],
+            "private_key":                 sa_info["private_key"].replace("\\n", "\n"),
             "client_email":                sa_info["client_email"],
             "client_id":                   sa_info["client_id"],
             "auth_uri":                    sa_info.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
@@ -42,9 +40,6 @@ def init_gee() -> bool:
             "auth_provider_x509_cert_url": sa_info.get("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
             "client_x509_cert_url":        sa_info.get("client_x509_cert_url", ""),
         }
-
-        # Replace literal \n with real newlines in the private key
-        sa_dict["private_key"] = sa_dict["private_key"].replace("\\n", "\n")
 
         credentials = ee.ServiceAccountCredentials(
             email=sa_dict["client_email"],
@@ -58,6 +53,7 @@ def init_gee() -> bool:
         print(f"[GEE] Streamlit auth failed: {e}")
 
     try:
+        import ee
         ee.Initialize()
         print("[GEE] Initialized via default credentials")
         return True
@@ -65,6 +61,17 @@ def init_gee() -> bool:
         print(f"[GEE] Default auth failed: {e}")
 
     return False
+
+
+def gee_available() -> bool:
+    """Quick check without reinitializing."""
+    try:
+        import ee
+        ee.Number(1).getInfo()
+        return True
+    except Exception:
+        return False
+
 
 # ─────────────────────────────────────────────────────────────
 # SENSOR CONFIGS
@@ -110,7 +117,7 @@ def auto_select_sensor(year: int) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# IMAGE FETCHING (UNCHANGED CORE LOGIC, SAFE)
+# IMAGE FETCHING
 # ─────────────────────────────────────────────────────────────
 
 def fetch_image_as_array(
@@ -136,7 +143,7 @@ def fetch_image_as_array(
     aoi = point.buffer(buffer_km * 1000).bounds()
 
     start = f"{year}-{month_start:02d}-01"
-    end = f"{year}-{month_end:02d}-28"
+    end   = f"{year}-{month_end:02d}-28"
 
     col = (
         ee.ImageCollection(cfg["collection"])
@@ -146,70 +153,82 @@ def fetch_image_as_array(
         .select(cfg["bands"])
     )
 
-    if col.size().getInfo() == 0:
-        print("[GEE] No scenes found")
+    count = col.size().getInfo()
+    print(f"[GEE] Scenes found: {count}")
+    if count == 0:
+        print("[GEE] No scenes found — try relaxing cloud cover or date range")
         return None
 
     image = col.median().multiply(cfg["scale_factor"])
     if "offset" in cfg:
         image = image.add(cfg["offset"])
-
     image = image.clip(aoi)
 
-try:
-    import requests, zipfile, io, rasterio, tempfile, os
+    try:
+        import requests, zipfile, io, rasterio, os
 
-    url = image.getDownloadURL({
-        "scale": cfg["resolution"],
-        "region": aoi.getInfo(),
-        "format": "GEO_TIFF",
-        "bands": cfg["bands"],
-    })
+        url = image.getDownloadURL({
+            "scale":  cfg["resolution"],
+            "region": aoi.getInfo(),
+            "format": "GEO_TIFF",
+            "bands":  cfg["bands"],
+        })
 
-    r = requests.get(url, timeout=120)
-    r.raise_for_status()
+        print(f"[GEE] Downloading from URL...")
+        r = requests.get(url, timeout=180)
+        r.raise_for_status()
+        print(f"[GEE] Download complete — {len(r.content) / 1024:.1f} KB")
 
-    bands = []
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-        tif_names = sorted([n for n in z.namelist() if n.endswith(".tif")])
-        print(f"[GEE] ZIP contains: {tif_names}")
-        
-        for name in tif_names:
-            # Write to a real temp file — rasterio needs seekable file on disk
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
-                tmp.write(z.read(name))
-                tmp_path = tmp.name
-            try:
-                with rasterio.open(tmp_path) as src:
-                    bands.append(src.read(1).astype(np.float32))
-            finally:
-                os.unlink(tmp_path)
+        bands = []
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            tif_names = sorted([n for n in z.namelist() if n.endswith(".tif")])
+            print(f"[GEE] ZIP contains: {tif_names}")
 
-    if not bands:
-        print("[GEE] No bands extracted from ZIP")
+            for name in tif_names:
+                # Write to real temp file — rasterio needs seekable file on disk
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
+                    tmp.write(z.read(name))
+                    tmp_path = tmp.name
+                try:
+                    with rasterio.open(tmp_path) as src:
+                        bands.append(src.read(1).astype(np.float32))
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+        if not bands:
+            print("[GEE] No bands extracted from ZIP")
+            return None
+
+        array = np.stack(bands, axis=0)
+        array = np.clip(array, 0, 1)
+
+        meta = {
+            "sensor": sensor,
+            "year":   year,
+            "source": "GEE",
+        }
+
+        print(f"[GEE] Success — array shape: {array.shape}")
+        return array, meta
+
+    except Exception as e:
+        print(f"[GEE] Download error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
-
-    array = np.stack(bands, axis=0)
-    array = np.clip(array, 0, 1)
-
-    meta = {"sensor": sensor, "year": year, "source": "GEE"}
-    print(f"[GEE] Success {array.shape}")
-    return array, meta
-
-except Exception as e:
-    print(f"[GEE] Download error: {e}")
-    import traceback
-    traceback.print_exc()
-    return None
 
 
 # ─────────────────────────────────────────────────────────────
-# SAVE FUNCTION (UNCHANGED BUT SAFE)
+# SAVE FUNCTION
 # ─────────────────────────────────────────────────────────────
 
 def save_array_as_geotiff(array: np.ndarray, meta: dict, output_path: str):
     try:
         import rasterio
+        from rasterio.transform import from_bounds
 
         with rasterio.open(
             output_path,
