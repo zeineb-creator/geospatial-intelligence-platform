@@ -25,12 +25,9 @@ def init_gee() -> bool:
         sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
 
         if sa_info:
-            key_dict = {k: v for k, v in sa_info.items()}
-            key_json = json.dumps(key_dict)
-
             credentials = ee.ServiceAccountCredentials(
                 email=sa_info["client_email"],
-                key_data=key_json,
+                key_data=json.dumps(dict(sa_info)),
             )
             ee.Initialize(credentials)
             print("[GEE] Initialized via Streamlit service account")
