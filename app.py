@@ -511,21 +511,25 @@ try:
                 except Exception as scene_e:
                     st.warning(f"Scene count check failed (non-fatal): {scene_e}")
 
+# ── REPLACE the GEE fetch block in app.py ────────────────────────────────────
+# Find this section (around line 418) and replace with the block below.
+# Search for:
+#   result1 = fetch_image_as_array(
+# Replace the entire fetch + error handling block with:
+
                 # ── Fetch image 1 ─────────────────────────────────────────────
                 st.write(f"  Downloading image data for `{gee_params['year1']}`…")
-                result1 = fetch_image_as_array(
-                    lat=gee_params["lat"],
-                    lon=gee_params["lon"],
-                    year=gee_params["year1"],
-                    sensor=sensor1,
-                    buffer_km=gee_params["buffer_km"],
-                )
-
-                if result1 is None:
-                    st.error(
-                        "❌ GEE image download failed. "
-                        "Check Streamlit Cloud logs for [GEE] traceback."
+                try:
+                    result1 = fetch_image_as_array(
+                        lat=gee_params["lat"],
+                        lon=gee_params["lon"],
+                        year=gee_params["year1"],
+                        sensor=sensor1,
+                        buffer_km=gee_params["buffer_km"],
                     )
+                except RuntimeError as gee_err:
+                    st.error("❌ GEE image download failed")
+                    st.code(str(gee_err), language="text")
                     st.stop()
 
                 array_t1, meta_t1 = result1
@@ -534,31 +538,30 @@ try:
                 from gee_connector import save_array_as_geotiff
                 path_t1 = save_array_as_geotiff(array_t1, meta_t1, path_t1)
                 temp_files.append(path_t1)
-                st.write(f"  ✓ Image 1 (`{gee_params['year1']}`) downloaded — shape: `{array_t1.shape}`")
+                st.write(f"  ✓ Image 1 (`{gee_params['year1']}`) — shape: `{array_t1.shape}`")
 
                 # ── Fetch image 2 ─────────────────────────────────────────────
                 if gee_params["year2"] != gee_params["year1"]:
                     sensor2 = gee_params.get("sensor") or auto_select_sensor(gee_params["year2"])
                     st.write(f"  Downloading image data for `{gee_params['year2']}`…")
-                    result2 = fetch_image_as_array(
-                        lat=gee_params["lat"],
-                        lon=gee_params["lon"],
-                        year=gee_params["year2"],
-                        sensor=sensor2,
-                        buffer_km=gee_params["buffer_km"],
-                    )
-                    if result2 is not None:
+                    try:
+                        result2 = fetch_image_as_array(
+                            lat=gee_params["lat"],
+                            lon=gee_params["lon"],
+                            year=gee_params["year2"],
+                            sensor=sensor2,
+                            buffer_km=gee_params["buffer_km"],
+                        )
                         array_t2, meta_t2 = result2
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
                             path_t2 = tmp.name
                         path_t2 = save_array_as_geotiff(array_t2, meta_t2, path_t2)
                         temp_files.append(path_t2)
-                        st.write(f"  ✓ Image 2 (`{gee_params['year2']}`) downloaded — shape: `{array_t2.shape}`")
-                    else:
+                        st.write(f"  ✓ Image 2 (`{gee_params['year2']}`) — shape: `{array_t2.shape}`")
+                    except RuntimeError as gee_err2:
                         pipeline_warnings.append(
-                            f"GEE Image 2 ({gee_params['year2']}) fetch failed — temporal analysis skipped."
+                            f"Image 2 ({gee_params['year2']}) failed — temporal analysis skipped.\n{gee_err2}"
                         )
-
             except Exception as e:
                 import traceback
                 st.error(f"❌ GEE error: {e}")
