@@ -1,12 +1,7 @@
 """
 gee_connector.py — Google Earth Engine direct image fetcher
 ============================================================
-Robust implementation with:
-  - Multi-strategy download (computePixels → getDownloadURL fallback)
-  - Correct sensor auto-selection with collection date guards
-  - Adaptive resolution scaling to stay under GEE memory limits
-  - Full error surfacing so failures are diagnosable
-  - Both Sentinel-2 SR collections (older + harmonised)
+Robust implementation with improved error handling and fallback strategies.
 """
 
 import os
@@ -15,6 +10,8 @@ import json
 import tempfile
 import zipfile
 import numpy as np
+import time
+import ee
 
 
 # ─────────────────────────────────────────────────────────────
@@ -86,15 +83,6 @@ def gee_available() -> bool:
 # ─────────────────────────────────────────────────────────────
 # SENSOR CONFIGURATIONS
 # ─────────────────────────────────────────────────────────────
-# Each entry defines:
-#   collection   – GEE ImageCollection ID
-#   bands        – band names to select (exported in this order: B/G/R/NIR/SWIR1/SWIR2)
-#   scale_factor – multiplicative reflectance scaling
-#   offset       – additive offset (Landsat C02 only)
-#   resolution   – native GSD in metres
-#   cloud_prop   – property name used for cloud filtering
-#   cloud_max    – maximum cloud % allowed in initial filter
-#   start_year   – first year data are available
 
 SENSOR_CONFIGS = {
     "Sentinel-2 L2A": {
@@ -107,7 +95,6 @@ SENSOR_CONFIGS = {
         "start_year":   2017,
     },
     "Sentinel-2 L2A (old)": {
-        # Pre-harmonised collection; covers 2015–2016 reprocessed scenes
         "collection":   "COPERNICUS/S2_SR",
         "bands":        ["B2", "B3", "B4", "B8", "B11", "B12"],
         "scale_factor": 0.0001,
@@ -148,7 +135,6 @@ SENSOR_CONFIGS = {
     },
 }
 
-# Ordered preference list used by auto_select_sensor
 _SENSOR_PRIORITY = [
     "Sentinel-2 L2A",
     "Sentinel-2 L2A (old)",
@@ -159,15 +145,11 @@ _SENSOR_PRIORITY = [
 
 
 def auto_select_sensor(year: int) -> str:
-    """
-    Return the best sensor available for a given year.
-    Prefers highest-resolution option; falls back through the priority list.
-    """
+    """Return the best sensor available for a given year."""
     for name in _SENSOR_PRIORITY:
         cfg = SENSOR_CONFIGS[name]
         if year >= cfg["start_year"]:
             return name
-    # Absolute fallback
     return "Landsat 5 TM"
 
 
@@ -177,7 +159,6 @@ def auto_select_sensor(year: int) -> str:
 
 def _aoi_from_point(lon: float, lat: float, buffer_km: float):
     """Return a GEE rectangular AOI buffered around a point."""
-    import ee
     return ee.Geometry.Point([lon, lat]).buffer(buffer_km * 1000).bounds()
 
 
@@ -185,10 +166,8 @@ def _build_collection(cfg: dict, aoi, year: int,
                       month_start: int = 1, month_end: int = 12,
                       cloud_max_override: float = None):
     """Build a filtered, band-selected ImageCollection."""
-    import ee
     cloud_max = cloud_max_override if cloud_max_override is not None else cfg["cloud_max"]
     start = f"{year}-{month_start:02d}-01"
-    # End on the last day of month_end (use first day of next month)
     if month_end == 12:
         end = f"{year + 1}-01-01"
     else:
@@ -205,7 +184,6 @@ def _build_collection(cfg: dict, aoi, year: int,
 
 def _apply_scaling(image, cfg: dict):
     """Apply scale + optional offset to convert to surface reflectance [0, 1]."""
-    import ee
     image = image.multiply(cfg["scale_factor"])
     if "offset" in cfg:
         image = image.add(cfg["offset"])
@@ -213,169 +191,173 @@ def _apply_scaling(image, cfg: dict):
 
 
 def _optimal_download_scale(buffer_km: float, native_res: int,
-                             target_pixels: int = 512) -> int:
+                             target_pixels: int = 400) -> int:
     """
-    Compute a download resolution that:
-      - Keeps the raster below ~target_pixels × target_pixels per band
-      - Is never finer than the sensor's native resolution
-      - Stays well within GEE's ~32 MB per download limit
+    Compute a download resolution that keeps the raster size manageable.
     """
-    side_m = buffer_km * 2 * 1000          # AOI side length in metres
-    raw_scale = int(side_m / target_pixels) # metres per pixel to hit target_pixels
-    scale = max(raw_scale, native_res)      # never finer than native
-    scale = max(scale, 30)                  # hard floor: 30 m
-    # Round up to nearest 10 m for clean numbers
+    side_m = buffer_km * 2 * 1000
+    raw_scale = int(side_m / target_pixels)
+    scale = max(raw_scale, native_res)
+    scale = max(scale, 30)
     scale = int(np.ceil(scale / 10.0) * 10)
-    print(f"[GEE] AOI side={side_m:.0f}m  native={native_res}m  "
-          f"→ download scale={scale}m ({side_m/scale:.0f}px per side)")
+    print(f"[GEE] AOI side={side_m:.0f}m → download scale={scale}m")
     return scale
 
 
 # ─────────────────────────────────────────────────────────────
-# DOWNLOAD STRATEGY 1 — computePixels  (preferred, no zip)
-# ─────────────────────────────────────────────────────────────
-
-def _download_via_compute_pixels(image, aoi, cfg: dict,
-                                  scale: int) -> np.ndarray | None:
-    """
-    Use ee.data.computePixels to download a GeoTIFF directly into memory.
-    Requires earthengine-api >= 0.1.374.
-    Returns (C, H, W) float32 array clipped to [0, 1], or None on failure.
-    """
-    try:
-        import ee
-        import rasterio
-        from rasterio.io import MemoryFile
-
-        request = {
-            "expression": image,
-            "fileFormat": "GEO_TIFF",
-            "bandIds": cfg["bands"],
-            "grid": {
-                "dimensions": {"width": 512, "height": 512},
-                "affineTransform": {},
-                "crsCode": "EPSG:4326",
-            },
-            "region": aoi,
-        }
-
-        # Simpler form that works across more API versions
-        params = {
-            "expression": image.clip(aoi),
-            "fileFormat": "GEO_TIFF",
-            "scale": scale,
-            "region": aoi.getInfo(),
-            "crs": "EPSG:4326",
-            "bands": [{"id": b} for b in cfg["bands"]],
-        }
-
-        print("[GEE] Trying computePixels…")
-        raw = ee.data.computePixels(params)
-
-        with MemoryFile(raw) as mf:
-            with mf.open() as ds:
-                array = ds.read().astype(np.float32)
-
-        array = np.clip(array, 0.0, 1.0)
-        print(f"[GEE] computePixels success — shape {array.shape}")
-        return array
-
-    except Exception as e:
-        print(f"[GEE] computePixels failed: {e}")
-        return None
-
-
-# ─────────────────────────────────────────────────────────────
-# DOWNLOAD STRATEGY 2 — getDownloadURL + zip  (fallback)
+# DOWNLOAD STRATEGY — getDownloadURL with robust error handling
 # ─────────────────────────────────────────────────────────────
 
 def _download_via_url(image, aoi, cfg: dict, scale: int) -> np.ndarray | None:
     """
-    Use getDownloadURL to retrieve a zip of per-band GeoTIFFs.
+    Download image using getDownloadURL with improved error handling.
     Returns (C, H, W) float32 array clipped to [0, 1], or None on failure.
     """
     try:
         import requests
         import rasterio
 
-        params = {
-            "scale":       scale,
-            "region":      aoi.getInfo(),
-            "format":      "GEO_TIFF",
-            "bands":       cfg["bands"],
-            "crs":         "EPSG:4326",
-            "filePerBand": True,
+        # Ensure the image is properly clipped to AOI
+        clipped = image.clip(aoi)
+        
+        # Get the bounds as a GeoJSON
+        bounds = aoi.bounds().getInfo()
+        region = {
+            "type": "Polygon",
+            "coordinates": [[
+                [bounds[0], bounds[1]],
+                [bounds[0], bounds[3]],
+                [bounds[2], bounds[3]],
+                [bounds[2], bounds[1]],
+                [bounds[0], bounds[1]]
+            ]]
         }
-
-        print(f"[GEE] Requesting getDownloadURL at {scale}m…")
-        url = image.getDownloadURL(params)
-        print(f"[GEE] URL obtained, downloading…")
-
-        r = requests.get(url, timeout=360)
-
-        # ── Detailed error surfacing ──────────────────────────
-        content_type = r.headers.get("Content-Type", "")
-        print(f"[GEE] Response: HTTP {r.status_code} | "
-              f"size={len(r.content)/1024:.1f} KB | type={content_type}")
-
-        if r.status_code != 200:
-            body = r.content[:800].decode("utf-8", errors="replace")
-            print(f"[GEE] HTTP error body: {body}")
-            return None
-
-        # If GEE returns JSON it's an error message
-        if "json" in content_type or (r.content[:1] == b"{"):
-            body = r.content[:800].decode("utf-8", errors="replace")
-            print(f"[GEE] GEE returned error JSON: {body}")
-            return None
-
-        # Verify it's a zip
-        is_zip = ("zip" in content_type or
-                  "octet-stream" in content_type or
-                  r.content[:2] == b"PK")
-        if not is_zip:
-            body = r.content[:800].decode("utf-8", errors="replace")
-            print(f"[GEE] Not a zip file. Response preview: {body}")
-            return None
-
-        # ── Unzip and stack bands ─────────────────────────────
-        bands = []
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            tif_names = sorted(n for n in z.namelist() if n.lower().endswith(".tif"))
-            print(f"[GEE] ZIP contains {len(tif_names)} TIF(s): {tif_names}")
-            if not tif_names:
-                print("[GEE] No .tif files found in zip")
-                return None
-
-            for name in tif_names:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
-                    tmp.write(z.read(name))
-                    tmp_path = tmp.name
-                try:
-                    with rasterio.open(tmp_path) as src:
-                        bands.append(src.read(1).astype(np.float32))
-                finally:
+        
+        # Build download parameters
+        params = {
+            "scale": scale,
+            "region": region,
+            "format": "GEO_TIFF",
+            "crs": "EPSG:4326",
+        }
+        
+        # For multi-band downloads, specify bands
+        if len(cfg["bands"]) > 1:
+            params["bands"] = cfg["bands"]
+        
+        print(f"[GEE] Requesting download at {scale}m scale...")
+        url = clipped.getDownloadURL(params)
+        print(f"[GEE] Download URL obtained (length: {len(url)} chars)")
+        
+        # Download with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                r = requests.get(url, timeout=300, stream=True)
+                
+                if r.status_code != 200:
+                    print(f"[GEE] HTTP {r.status_code}")
+                    error_text = r.text[:500] if r.text else "No response body"
+                    print(f"[GEE] Error response: {error_text}")
+                    
+                    # Check if it's a quota error
+                    if "Quota exceeded" in error_text or "User project limit" in error_text:
+                        print("[GEE] Quota exceeded — consider using a different project")
+                    return None
+                
+                # Check content type
+                content_type = r.headers.get("Content-Type", "")
+                print(f"[GEE] Content-Type: {content_type}")
+                print(f"[GEE] Content-Length: {len(r.content)} bytes")
+                
+                # Try to detect JSON error messages
+                if r.content and len(r.content) < 5000:
                     try:
-                        os.unlink(tmp_path)
-                    except OSError:
+                        error_json = r.json()
+                        if "error" in error_json:
+                            print(f"[GEE] GEE returned error JSON: {error_json.get('error', {}).get('message', 'Unknown error')}")
+                            return None
+                    except:
                         pass
-
-        if not bands:
-            print("[GEE] No bands extracted from zip")
-            return None
-
-        array = np.stack(bands, axis=0)          # (C, H, W)
-        array = np.clip(array, 0.0, 1.0)
-        print(f"[GEE] getDownloadURL success — shape {array.shape}")
-        return array
-
-    except zipfile.BadZipFile:
-        body = getattr(r, "content", b"")[:500].decode("utf-8", errors="replace")
-        print(f"[GEE] BadZipFile — likely a GEE quota/size error. Body: {body}")
+                
+                # Verify it's a zip file
+                if not r.content or len(r.content) < 100:
+                    print("[GEE] Empty response received")
+                    return None
+                
+                # Check for zip signature (PK)
+                if r.content[:2] != b'PK':
+                    # Try to decode as text for error message
+                    try:
+                        preview = r.content[:200].decode('utf-8', errors='ignore')
+                        if "error" in preview.lower() or "failed" in preview.lower():
+                            print(f"[GEE] Server error response: {preview}")
+                        else:
+                            print(f"[GEE] Unexpected response (not a zip file): {preview[:100]}")
+                    except:
+                        print("[GEE] Response is not a zip file (no PK header)")
+                    return None
+                
+                # Success — process the zip file
+                print("[GEE] Download successful, processing zip file...")
+                
+                with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                    tif_names = sorted([n for n in z.namelist() if n.lower().endswith(".tif")])
+                    print(f"[GEE] Found {len(tif_names)} TIF file(s) in zip: {tif_names}")
+                    
+                    if not tif_names:
+                        print("[GEE] No TIF files found in zip")
+                        return None
+                    
+                    # Read all bands
+                    bands = []
+                    for name in tif_names:
+                        # Extract to temporary file
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
+                            tmp.write(z.read(name))
+                            tmp_path = tmp.name
+                        
+                        try:
+                            with rasterio.open(tmp_path) as src:
+                                band_data = src.read(1).astype(np.float32)
+                                bands.append(band_data)
+                        finally:
+                            try:
+                                os.unlink(tmp_path)
+                            except OSError:
+                                pass
+                    
+                    if not bands:
+                        print("[GEE] No bands extracted from zip")
+                        return None
+                    
+                    array = np.stack(bands, axis=0)
+                    array = np.clip(array, 0.0, 1.0)
+                    print(f"[GEE] Successfully extracted array shape: {array.shape}")
+                    return array
+                
+            except requests.exceptions.Timeout:
+                print(f"[GEE] Request timeout on attempt {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+            except requests.exceptions.RequestException as e:
+                print(f"[GEE] Request error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+            except Exception as e:
+                print(f"[GEE] Processing error: {e}")
+                return None
+        
+        return None
+        
+    except zipfile.BadZipFile as e:
+        print(f"[GEE] BadZipFile error: {e}")
         return None
     except Exception as e:
         import traceback
-        print(f"[GEE] getDownloadURL error: {e}")
+        print(f"[GEE] Unexpected error in _download_via_url: {e}")
         traceback.print_exc()
         return None
 
@@ -394,22 +376,8 @@ def fetch_image_as_array(
     buffer_km: float = 5.0,
 ) -> tuple | None:
     """
-    Fetch a cloud-free median composite for a location / year and return it as
-    a (C, H, W) float32 numpy array with values in [0, 1].
-
-    Parameters
-    ----------
-    lat, lon     : Centre of the AOI
-    year         : Image acquisition year
-    month_start  : Start month of the compositing window (default 1)
-    month_end    : End month of the compositing window (default 12)
-    sensor       : Force a specific sensor; None = auto-select
-    buffer_km    : Half-width of the square AOI in km
-
-    Returns
-    -------
-    (array, meta) on success, None on failure.
-    meta contains: sensor, year, source, n_bands, scale_used
+    Fetch a cloud-free median composite for a location / year.
+    Returns (array, meta) on success, None on failure.
     """
     try:
         import ee
@@ -419,9 +387,8 @@ def fetch_image_as_array(
 
     # ── Sensor selection ──────────────────────────────────────
     sensor = sensor or auto_select_sensor(year)
-    cfg    = SENSOR_CONFIGS[sensor]
-    print(f"[GEE] Sensor={sensor}  year={year}  "
-          f"lat={lat:.4f}  lon={lon:.4f}  buffer={buffer_km}km")
+    cfg = SENSOR_CONFIGS[sensor]
+    print(f"[GEE] Sensor={sensor} year={year} lat={lat:.4f} lon={lon:.4f} buffer={buffer_km}km")
 
     # ── AOI ───────────────────────────────────────────────────
     aoi = _aoi_from_point(lon, lat, buffer_km)
@@ -429,62 +396,76 @@ def fetch_image_as_array(
     # ── Build collection with progressive cloud relaxation ────
     collection = None
     cloud_limits = [cfg["cloud_max"], 50, 80]
+    count = 0
+    
     for cloud_limit in cloud_limits:
-        col = _build_collection(cfg, aoi, year,
-                                month_start, month_end,
-                                cloud_max_override=cloud_limit)
-        count = col.size().getInfo()
-        print(f"[GEE] Scenes (cloud<{cloud_limit}%): {count}")
-        if count > 0:
-            collection = col
-            break
+        try:
+            col = _build_collection(cfg, aoi, year, month_start, month_end, cloud_max_override=cloud_limit)
+            count = col.size().getInfo()
+            print(f"[GEE] Scenes (cloud<{cloud_limit}%): {count}")
+            if count > 0:
+                collection = col
+                break
+        except Exception as e:
+            print(f"[GEE] Error building collection at cloud limit {cloud_limit}: {e}")
+            continue
 
     if collection is None or count == 0:
         # Last resort: try full year with cloud<80%
-        col = _build_collection(cfg, aoi, year, 1, 12, cloud_max_override=80)
-        count = col.size().getInfo()
-        print(f"[GEE] Full-year fallback scenes (cloud<80%): {count}")
-        if count == 0:
-            print(f"[GEE] No scenes found for {sensor} {year} — "
-                  "try a different year, larger buffer, or different sensor")
+        try:
+            col = _build_collection(cfg, aoi, year, 1, 12, cloud_max_override=80)
+            count = col.size().getInfo()
+            print(f"[GEE] Full-year fallback scenes (cloud<80%): {count}")
+            if count > 0:
+                collection = col
+            else:
+                print(f"[GEE] No scenes found for {sensor} {year}")
+                return None
+        except Exception as e:
+            print(f"[GEE] Fallback collection failed: {e}")
             return None
-        collection = col
 
     # ── Build composite and scale ─────────────────────────────
-    image = _apply_scaling(collection.median(), cfg).clip(aoi)
+    try:
+        composite = collection.median()
+        image = _apply_scaling(composite, cfg).clip(aoi)
+    except Exception as e:
+        print(f"[GEE] Error building composite: {e}")
+        return None
 
-    # ── Adaptive download resolution ─────────────────────────
-    scale = _optimal_download_scale(buffer_km, cfg["resolution"])
-
-    # ── Strategy 1: computePixels ─────────────────────────────
-    array = _download_via_compute_pixels(image, aoi, cfg, scale)
-
-    # ── Strategy 2: getDownloadURL fallback ───────────────────
-    if array is None:
-        print("[GEE] Falling back to getDownloadURL strategy…")
-        array = _download_via_url(image, aoi, cfg, scale)
-
-    # ── Strategy 3: coarser scale retry ──────────────────────
-    if array is None and scale < 500:
-        coarser = max(scale * 4, 500)
-        print(f"[GEE] Retrying at coarser scale {coarser}m…")
-        array = _download_via_url(image, aoi, cfg, coarser)
+    # ── Download ─────────────────────────────────────────────
+    # Start with a reasonable scale
+    scale = _optimal_download_scale(buffer_km, cfg["resolution"], target_pixels=400)
+    
+    # Try multiple scales if needed
+    scales_to_try = [scale, scale * 2, scale * 3, 500]
+    array = None
+    
+    for try_scale in scales_to_try:
+        if try_scale != scale:
+            print(f"[GEE] Retrying at coarser scale: {try_scale}m")
+        
+        array = _download_via_url(image, aoi, cfg, try_scale)
         if array is not None:
-            scale = coarser
-
+            scale = try_scale
+            break
+        
+        # Wait a bit before retry
+        if try_scale != scales_to_try[-1]:
+            time.sleep(1)
+    
     if array is None:
-        print("[GEE] All download strategies failed")
+        print("[GEE] All download attempts failed")
         return None
 
     meta = {
-        "sensor":   sensor,
-        "year":     year,
-        "source":   "GEE",
-        "n_bands":  array.shape[0],
+        "sensor": sensor,
+        "year": year,
+        "source": "GEE",
+        "n_bands": array.shape[0],
         "scale_used": scale,
     }
-    print(f"[GEE] ✓ array shape={array.shape}  "
-          f"range=[{array.min():.3f}, {array.max():.3f}]")
+    print(f"[GEE] ✓ array shape={array.shape} range=[{array.min():.3f}, {array.max():.3f}]")
     return array, meta
 
 
@@ -492,18 +473,25 @@ def fetch_image_as_array(
 # SAVE HELPER
 # ─────────────────────────────────────────────────────────────
 
-def save_array_as_geotiff(array: np.ndarray, meta: dict,
-                           output_path: str) -> str | None:
+def save_array_as_geotiff(array: np.ndarray, meta: dict, output_path: str) -> str | None:
     """Write a (C, H, W) float32 array to a GeoTIFF at output_path."""
     try:
         import rasterio
+        from rasterio.transform import from_origin
+        
+        # Create a simple transform (assuming lat/lon bounds)
+        # In production, you'd want to include proper georeferencing
+        transform = from_origin(0, 0, 1, 1)
+        
         with rasterio.open(
-            output_path, "w",
-            driver="GTiff",
+            output_path, 'w',
+            driver='GTiff',
             height=array.shape[1],
             width=array.shape[2],
             count=array.shape[0],
             dtype=np.float32,
+            crs='EPSG:4326',
+            transform=transform
         ) as dst:
             dst.write(array)
         return output_path
@@ -521,10 +509,7 @@ def fetch_and_save(
     sensor: str = None,
     buffer_km: float = 5.0,
 ) -> str | None:
-    """
-    Convenience wrapper: fetch an image and save it to a temp GeoTIFF.
-    Returns the file path on success, None on failure.
-    """
+    """Convenience wrapper: fetch an image and save it to a temp GeoTIFF."""
     result = fetch_image_as_array(
         lat=lat, lon=lon, year=year,
         month_start=month_start, month_end=month_end,
