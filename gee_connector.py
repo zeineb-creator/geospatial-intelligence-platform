@@ -1,11 +1,14 @@
+
 """
 gee_connector.py — Google Earth Engine direct image fetcher
 ============================================================
-Fixed based on observed errors:
-  1. computePixels: fixed grid params format for current earthengine-api
-  2. getDownloadURL: MM* magic bytes = GeoTIFF (not zip) — read directly
-     GEE sometimes returns a single multi-band GeoTIFF instead of a zip
-     regardless of filePerBand setting. Both cases are now handled.
+Fixes applied:
+  - save_array_as_geotiff now writes correct CRS (EPSG:4326) and
+    affine transform so rasterio can geocode the image and the
+    region name / CRS fields display correctly in the UI
+  - meta dict carries lat/lon/region_name so app.py can set ic.region
+    directly without relying on rasterio geocoding of the saved file
+  - computePixels and getDownloadURL both handle GeoTIFF + zip responses
 """
 
 import os
@@ -158,6 +161,48 @@ def auto_select_sensor(year: int) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
+# REVERSE GEOCODING
+# ─────────────────────────────────────────────────────────────
+
+def _reverse_geocode(lat: float, lon: float) -> str:
+    """
+    Return a human-readable place name for lat/lon via Nominatim.
+    Falls back to coordinate string on any failure.
+    """
+    try:
+        import urllib.request
+        ns = "N" if lat >= 0 else "S"
+        ew = "E" if lon >= 0 else "W"
+        fallback = f"{abs(lat):.3f}°{ns}, {abs(lon):.3f}°{ew}"
+
+        url = (
+            f"https://nominatim.openstreetmap.org/reverse"
+            f"?lat={lat}&lon={lon}&format=json&zoom=10&accept-language=en"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "GeoIntelPlatform/3.0 (research)"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read())
+
+        addr   = data.get("address", {})
+        parts  = []
+        for key in ["city", "town", "village", "county", "state", "country"]:
+            val = addr.get(key, "")
+            if val and sum(1 for c in val if ord(c) < 256) / max(len(val), 1) > 0.6:
+                parts.append(val)
+                if len(parts) == 2:
+                    break
+        return ", ".join(parts) if parts else fallback
+    except Exception as e:
+        print(f"[GEE] Geocoding failed: {e}")
+        ns = "N" if lat >= 0 else "S"
+        ew = "E" if lon >= 0 else "W"
+        return f"{abs(lat):.3f}°{ns}, {abs(lon):.3f}°{ew}"
+
+
+# ─────────────────────────────────────────────────────────────
 # INTERNAL HELPERS
 # ─────────────────────────────────────────────────────────────
 
@@ -188,69 +233,55 @@ def _scale_for_aoi(buffer_km: float, native_res: int, target_px: int = 256) -> i
 
 
 def _read_tiff_bytes(raw_bytes: bytes, cfg: dict):
-    """
-    Read a GeoTIFF from raw bytes (in-memory).
-    Returns (C,H,W) float32 array after scaling, or None.
-    Handles both single-band-per-file and multi-band GeoTIFFs.
-    """
+    """Read a GeoTIFF blob into a (C,H,W) float32 array and apply scaling."""
     try:
-        import rasterio
         from rasterio.io import MemoryFile
         with MemoryFile(raw_bytes) as mf:
             with mf.open() as ds:
-                array = ds.read().astype(np.float32)  # shape: (bands, H, W)
-        print(f"[GEE] read_tiff_bytes: shape={array.shape} "
-              f"dtype=float32 raw_range=[{array.min():.1f}, {array.max():.1f}]")
+                array = ds.read().astype(np.float32)
+        print(f"[GEE] read_tiff: shape={array.shape} "
+              f"raw=[{array.min():.1f}, {array.max():.1f}]")
         return _apply_scaling(array, cfg)
     except Exception as e:
         print(f"[GEE] _read_tiff_bytes failed: {e}")
         return None
 
 
+_TIFF_MAGIC = {b'\x49\x49', b'\x4d\x4d'}   # II (LE) or MM (BE)
+_ZIP_MAGIC  = b'PK'
+
+
 # ─────────────────────────────────────────────────────────────
 # DOWNLOAD — computePixels  (Strategy 1)
-# Fixed: use correct params format for current earthengine-api
 # ─────────────────────────────────────────────────────────────
 
 def _try_compute_pixels(image, aoi, cfg: dict, scale: int):
-    """
-    Uses ee.data.computePixels with corrected parameter format.
-    Returns (array, None) on success or (None, error_str) on failure.
-    """
     try:
         import ee
         print(f"[GEE] computePixels at {scale}m …")
 
-        # Correct format: use 'dimensions' not 'scale' inside grid
-        aoi_info   = aoi.getInfo()
-        coords     = aoi_info["coordinates"][0]
-        lons       = [c[0] for c in coords]
-        lats       = [c[1] for c in coords]
-        west, east = min(lons), max(lons)
-        south, north = min(lats), max(lats)
-
-        width  = max(1, int((east  - west)  * 111320 / scale))
-        height = max(1, int((north - south) * 111320 / scale))
-        # Cap at 1024 px per side to stay within quota
-        width  = min(width,  1024)
-        height = min(height, 1024)
+        aoi_info       = aoi.getInfo()
+        coords         = aoi_info["coordinates"][0]
+        lons           = [c[0] for c in coords]
+        lats           = [c[1] for c in coords]
+        west,  east    = min(lons), max(lons)
+        south, north   = min(lats), max(lats)
+        width          = min(1024, max(1, int((east  - west)  * 111320 / scale)))
+        height         = min(1024, max(1, int((north - south) * 111320 / scale)))
 
         params = {
             "expression": image,
             "fileFormat": "GEO_TIFF",
             "bandIds":    cfg["bands"],
             "grid": {
-                "crsCode":    "EPSG:4326",
+                "crsCode": "EPSG:4326",
                 "affineTransform": {
-                    "scaleX":      (east - west)  / width,
-                    "scaleY":     -(north - south) / height,
-                    "translateX":  west,
-                    "translateY":  north,
+                    "scaleX":     (east  - west)  / width,
+                    "scaleY":    -(north - south) / height,
+                    "translateX": west,
+                    "translateY": north,
                 },
-                "dimensions": {
-                    "width":  width,
-                    "height": height,
-                },
+                "dimensions": {"width": width, "height": height},
             },
         }
 
@@ -271,36 +302,22 @@ def _try_compute_pixels(image, aoi, cfg: dict, scale: int):
 
 # ─────────────────────────────────────────────────────────────
 # DOWNLOAD — getDownloadURL  (Strategy 2)
-# Fixed: MM* magic bytes = GeoTIFF, not zip — read directly
 # ─────────────────────────────────────────────────────────────
 
-# TIFF magic bytes: II (little-endian) = b'\x49\x49' or MM (big-endian) = b'\x4d\x4d'
-_TIFF_MAGIC = {b'\x49\x49', b'\x4d\x4d'}
-_ZIP_MAGIC  = b'PK'
-
-
 def _try_download_url(image, aoi, cfg: dict, scale: int):
-    """
-    Uses getDownloadURL.
-    GEE may return either a zip-of-TIFFs OR a single multi-band GeoTIFF.
-    Both cases are handled.
-    Returns (array, None) on success or (None, error_str) on failure.
-    """
     import requests
-    import rasterio
     from rasterio.io import MemoryFile
 
-    # Request multi-band GeoTIFF directly — more reliable than per-band zip
     params = {
         "scale":       scale,
         "region":      aoi.getInfo(),
         "format":      "GEO_TIFF",
         "bands":       cfg["bands"],
         "crs":         "EPSG:4326",
-        "filePerBand": False,          # ← request single multi-band GeoTIFF
+        "filePerBand": False,
     }
 
-    print(f"[GEE] getDownloadURL at {scale}m (multi-band GeoTIFF) …")
+    print(f"[GEE] getDownloadURL at {scale}m …")
     try:
         url = image.getDownloadURL(params)
     except Exception as e:
@@ -323,7 +340,6 @@ def _try_download_url(image, aoi, cfg: dict, scale: int):
         body = r.content[:600].decode("utf-8", errors="replace")
         return None, f"HTTP {r.status_code} at {scale}m: {body}"
 
-    # GEE error responses come as JSON/HTML
     first = r.content[:1]
     if first in (b"{", b"<") or "json" in ct or "html" in ct:
         body = r.content[:600].decode("utf-8", errors="replace")
@@ -331,12 +347,12 @@ def _try_download_url(image, aoi, cfg: dict, scale: int):
 
     magic2 = r.content[:2]
 
-    # ── Case A: GeoTIFF returned directly ────────────────────
+    # ── Direct GeoTIFF ────────────────────────────────────────
     if magic2 in _TIFF_MAGIC:
         print(f"[GEE] Got direct GeoTIFF ({size_kb:.1f} KB)")
         array = _read_tiff_bytes(r.content, cfg)
         if array is None:
-            return None, f"Failed to read direct GeoTIFF at {scale}m"
+            return None, f"Failed to read GeoTIFF at {scale}m"
         if array.shape[0] != len(cfg["bands"]):
             return None, (
                 f"Band count mismatch: expected {len(cfg['bands'])}, "
@@ -346,9 +362,9 @@ def _try_download_url(image, aoi, cfg: dict, scale: int):
               f"range=[{array.min():.3f}, {array.max():.3f}]")
         return array, None
 
-    # ── Case B: zip of per-band GeoTIFFs ─────────────────────
+    # ── Zip of per-band GeoTIFFs ──────────────────────────────
     if magic2 == _ZIP_MAGIC:
-        print(f"[GEE] Got zip ({size_kb:.1f} KB), extracting bands …")
+        print(f"[GEE] Got zip ({size_kb:.1f} KB)")
         bands = []
         try:
             with zipfile.ZipFile(io.BytesIO(r.content)) as z:
@@ -369,15 +385,13 @@ def _try_download_url(image, aoi, cfg: dict, scale: int):
 
         if not bands:
             return None, f"No bands from zip at {scale}m"
-
         array = _apply_scaling(np.stack(bands, axis=0), cfg)
         print(f"[GEE] getDownloadURL(zip) OK — shape={array.shape} "
               f"range=[{array.min():.3f}, {array.max():.3f}]")
         return array, None
 
-    # ── Unknown format ────────────────────────────────────────
     preview = r.content[:200].decode("utf-8", errors="replace")
-    return None, f"Unknown response format at {scale}m (magic={magic2!r}): {preview}"
+    return None, f"Unknown format at {scale}m (magic={magic2!r}): {preview}"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -395,9 +409,9 @@ def fetch_image_as_array(
 ):
     """
     Fetch a cloud-free median composite.
-    Returns (array, meta) on success.
+    Returns (array, meta) on success — meta includes lat, lon, region_name,
+    crs, and transform so the saved GeoTIFF is properly georeferenced.
     Raises RuntimeError with full diagnostics on failure.
-    array is (C, H, W) float32 in [0, 1].
     """
     try:
         import ee
@@ -412,6 +426,14 @@ def fetch_image_as_array(
           f"lat={lat:.4f} lon={lon:.4f} buffer={buffer_km}km")
 
     aoi = ee.Geometry.Point([lon, lat]).buffer(buffer_km * 1000).bounds()
+
+    # ── Compute AOI bounding box for transform ────────────────
+    aoi_info = aoi.getInfo()
+    coords   = aoi_info["coordinates"][0]
+    lons_c   = [c[0] for c in coords]
+    lats_c   = [c[1] for c in coords]
+    west, east   = min(lons_c), max(lons_c)
+    south, north = min(lats_c), max(lats_c)
 
     # ── Find a non-empty collection ───────────────────────────
     collection = None
@@ -453,7 +475,7 @@ def fetch_image_as_array(
     if err:
         errors.append(err)
 
-    # ── Strategy 2: getDownloadURL at multiple scales ─────────
+    # ── Strategy 2: getDownloadURL ────────────────────────────
     if array is None:
         for scale in scales:
             array, err = _try_download_url(image, aoi, cfg, scale)
@@ -474,25 +496,80 @@ def fetch_image_as_array(
             "  4. Verify service account has 'Earth Engine Resource Viewer' role"
         )
 
-    meta = {"sensor": sensor, "year": year, "source": "GEE", "n_bands": array.shape[0]}
-    print(f"[GEE] ── done ✓  shape={array.shape}")
+    # ── Reverse-geocode the actual coordinates ────────────────
+    region_name = _reverse_geocode(lat, lon)
+    print(f"[GEE] Region: {region_name}")
+
+    # ── Build affine transform for the saved GeoTIFF ──────────
+    # rasterio Affine: (pixel_width, 0, west, 0, -pixel_height, north)
+    h, w      = array.shape[1], array.shape[2]
+    px_w      = (east  - west)  / w
+    px_h      = (north - south) / h
+    try:
+        from rasterio.transform import from_bounds
+        transform = from_bounds(west, south, east, north, w, h)
+    except Exception:
+        transform = None
+
+    meta = {
+        "sensor":      sensor,
+        "year":        year,
+        "source":      "GEE",
+        "n_bands":     array.shape[0],
+        # Spatial reference — used by save_array_as_geotiff and input_handler
+        "lat":         lat,
+        "lon":         lon,
+        "west":        west,
+        "east":        east,
+        "south":       south,
+        "north":       north,
+        "crs":         "EPSG:4326",
+        "transform":   transform,
+        "width":       w,
+        "height":      h,
+        "resolution":  (px_w, px_h),
+        "region_name": region_name,
+    }
+
+    print(f"[GEE] ── done ✓  shape={array.shape}  region={region_name}")
     return array, meta
 
 
 # ─────────────────────────────────────────────────────────────
-# SAVE HELPER
+# SAVE HELPER — writes CRS + transform into the GeoTIFF
 # ─────────────────────────────────────────────────────────────
 
 def save_array_as_geotiff(array: np.ndarray, meta: dict, output_path: str):
+    """
+    Write (C, H, W) float32 array to a georeferenced GeoTIFF.
+    Uses CRS and transform from meta if available so rasterio
+    can correctly geocode the image in input_handler.
+    """
     try:
         import rasterio
-        with rasterio.open(
-            output_path, "w", driver="GTiff",
-            height=array.shape[1], width=array.shape[2],
-            count=array.shape[0], dtype=np.float32,
-        ) as dst:
+        from rasterio.crs import CRS
+
+        crs_str   = meta.get("crs", "EPSG:4326")
+        transform = meta.get("transform", None)
+
+        open_kwargs = dict(
+            driver="GTiff",
+            height=array.shape[1],
+            width=array.shape[2],
+            count=array.shape[0],
+            dtype=np.float32,
+            crs=CRS.from_string(crs_str),
+        )
+        if transform is not None:
+            open_kwargs["transform"] = transform
+
+        with rasterio.open(output_path, "w", **open_kwargs) as dst:
             dst.write(array)
+
+        print(f"[GEE] Saved GeoTIFF: {output_path} "
+              f"crs={crs_str} transform={transform}")
         return output_path
+
     except Exception as e:
         print(f"[GEE] save_array_as_geotiff failed: {e}")
         return None
@@ -500,6 +577,7 @@ def save_array_as_geotiff(array: np.ndarray, meta: dict, output_path: str):
 
 def fetch_and_save(lat, lon, year, month_start=1, month_end=12,
                    sensor=None, buffer_km=5.0):
+    """Fetch and save to a temp GeoTIFF. Returns path or None."""
     try:
         result = fetch_image_as_array(
             lat=lat, lon=lon, year=year,
