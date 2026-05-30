@@ -1,7 +1,7 @@
 """
 gee_connector.py — Optimized Google Earth Engine connector
 ===========================================================
-Fast preview + actual data download when needed
+Fast preview-based streaming + actual data download
 """
 
 import ee
@@ -10,20 +10,50 @@ import tempfile
 import io
 import zipfile
 import requests
+import time
 import os
 
 
 # ─────────────────────────────────────────────
-# INIT GEE
+# INIT GEE (SIMPLIFIED)
 # ─────────────────────────────────────────────
 
 def init_gee():
+    """Initialize Earth Engine with error handling."""
     try:
+        # Try to initialize with default credentials first
         ee.Initialize()
-        print("[GEE] Initialized")
+        print("[GEE] Initialized successfully")
         return True
     except Exception as e:
-        print("[GEE] Init failed:", e)
+        print(f"[GEE] Init error: {e}")
+        
+        # Try with high volume service account if available
+        try:
+            import streamlit as st
+            if "GEE_SERVICE_ACCOUNT" in st.secrets:
+                from oauth2client.service_account import ServiceAccountCredentials
+                sa = st.secrets["GEE_SERVICE_ACCOUNT"]
+                credentials = ee.ServiceAccountCredentials(
+                    sa["client_email"], 
+                    key_data=sa["private_key"]
+                )
+                ee.Initialize(credentials)
+                print("[GEE] Initialized with service account")
+                return True
+        except Exception as e2:
+            print(f"[GEE] Service account init failed: {e2}")
+        
+        return False
+
+
+def gee_available():
+    """Check if GEE is available."""
+    try:
+        import ee
+        ee.Number(1).getInfo()
+        return True
+    except:
         return False
 
 
@@ -117,15 +147,18 @@ def get_best_image(lat, lon, year, buffer_km=5, sensor=None):
     
     region = aoi(lon, lat, buffer_km)
     
-    # Try with strict cloud filter first, then relax
+    # Try with relaxed cloud filters
     for cloud_max in [30, 60, 80]:
-        col = build_collection(cfg, region, year, cloud_max=cloud_max)
-        count = col.size().getInfo()
-        if count > 0:
-            print(f"[GEE] Found {count} scenes with cloud < {cloud_max}%")
-            # Get the least cloudy image
-            image = col.sort(cfg["cloud"]).first()
-            return image, cfg, region
+        try:
+            col = build_collection(cfg, region, year, cloud_max=cloud_max)
+            count = col.size().getInfo()
+            if count > 0:
+                print(f"[GEE] Found {count} scenes with cloud < {cloud_max}%")
+                # Get the least cloudy image
+                image = col.sort(cfg["cloud"]).first()
+                return image, cfg, region
+        except Exception as e:
+            print(f"[GEE] Error checking cloud level {cloud_max}: {e}")
     
     print(f"[GEE] No scenes found for {sensor} {year}")
     return None, None, None
@@ -144,24 +177,31 @@ def get_preview_url(image, region, vis_params=None):
             "bands": ["B4", "B3", "B2"]  # RGB
         }
     
-    params = {
-        "region": region.getInfo(),
-        "dimensions": 1024,
-        "format": "png"
-    }
-    params.update(vis_params)
-    
-    return image.getThumbURL(params)
+    try:
+        # Get region as GeoJSON
+        region_json = region.getInfo()
+        
+        params = {
+            "region": region_json,
+            "dimensions": 1024,
+            "format": "png"
+        }
+        params.update(vis_params)
+        
+        return image.getThumbURL(params)
+    except Exception as e:
+        print(f"[GEE] Preview URL error: {e}")
+        return None
 
 
 # ─────────────────────────────────────────────
-# DOWNLOAD ACTUAL DATA (WHEN NEEDED)
+# DOWNLOAD ACTUAL DATA
 # ─────────────────────────────────────────────
 
 def download_image_as_array(image, region, cfg, scale=30):
     """Download the actual image data as a numpy array."""
     try:
-        # Get the region as GeoJSON
+        # Get region as GeoJSON
         region_json = region.getInfo()
         
         # Build download parameters
@@ -175,43 +215,60 @@ def download_image_as_array(image, region, cfg, scale=30):
         print(f"[GEE] Downloading at {scale}m resolution...")
         url = image.getDownloadURL(params)
         
-        # Download the file
-        response = requests.get(url, timeout=300)
+        # Download with retry
+        for attempt in range(3):
+            try:
+                response = requests.get(url, timeout=300)
+                
+                if response.status_code != 200:
+                    print(f"[GEE] Download failed: HTTP {response.status_code}")
+                    if attempt < 2:
+                        time.sleep(2)
+                        continue
+                    return None
+                
+                # Check if it's a zip file
+                if len(response.content) < 100 or response.content[:2] != b'PK':
+                    print("[GEE] Response is not a valid zip file")
+                    return None
+                
+                # Process zip file
+                import rasterio
+                from rasterio.io import MemoryFile
+                
+                with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                    tif_files = [f for f in z.namelist() if f.endswith('.tif')]
+                    if not tif_files:
+                        print("[GEE] No TIF files in zip")
+                        return None
+                    
+                    # Read the first TIF (should contain all bands)
+                    with z.open(tif_files[0]) as tif_file:
+                        with MemoryFile(tif_file) as memfile:
+                            with memfile.open() as src:
+                                array = src.read().astype(np.float32)
+                    
+                    # Apply scaling
+                    array = array * cfg["scale"]
+                    if "offset" in cfg:
+                        array = array + cfg["offset"]
+                    
+                    array = np.clip(array, 0.0, 1.0)
+                    print(f"[GEE] Downloaded array shape: {array.shape}")
+                    return array
+                    
+            except requests.exceptions.Timeout:
+                print(f"[GEE] Timeout on attempt {attempt + 1}")
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+            except Exception as e:
+                print(f"[GEE] Download error on attempt {attempt + 1}: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
         
-        if response.status_code != 200:
-            print(f"[GEE] Download failed: HTTP {response.status_code}")
-            return None
-        
-        # Check if it's a zip file
-        if response.content[:2] != b'PK':
-            print("[GEE] Response is not a zip file")
-            return None
-        
-        # Process zip file
-        import rasterio
-        from rasterio.io import MemoryFile
-        
-        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            # Find the TIF file
-            tif_files = [f for f in z.namelist() if f.endswith('.tif')]
-            if not tif_files:
-                print("[GEE] No TIF files in zip")
-                return None
-            
-            # Read the first TIF (should contain all bands)
-            with z.open(tif_files[0]) as tif_file:
-                with MemoryFile(tif_file) as memfile:
-                    with memfile.open() as src:
-                        array = src.read().astype(np.float32)
-                        
-            # Apply scaling
-            array = array * cfg["scale"]
-            if "offset" in cfg:
-                array = array + cfg["offset"]
-            
-            array = np.clip(array, 0.0, 1.0)
-            print(f"[GEE] Downloaded array shape: {array.shape}")
-            return array
+        return None
             
     except Exception as e:
         print(f"[GEE] Download error: {e}")
@@ -219,7 +276,7 @@ def download_image_as_array(image, region, cfg, scale=30):
 
 
 # ─────────────────────────────────────────────
-# MAIN FETCH FUNCTION (BALANCED)
+# MAIN FETCH FUNCTIONS
 # ─────────────────────────────────────────────
 
 def fetch_image_as_array(lat, lon, year, buffer_km=5.0, sensor=None):
@@ -239,7 +296,7 @@ def fetch_image_as_array(lat, lon, year, buffer_km=5.0, sensor=None):
     # Calculate optimal scale
     side_m = buffer_km * 2 * 1000
     optimal_scale = max(int(side_m / 400), cfg["resolution"])
-    optimal_scale = min(optimal_scale, 100)  # Cap at 100m for performance
+    optimal_scale = min(optimal_scale, 100)  # Cap at 100m
     
     # Download the actual data
     array = download_image_as_array(image, region, cfg, scale=optimal_scale)
@@ -258,15 +315,8 @@ def fetch_image_as_array(lat, lon, year, buffer_km=5.0, sensor=None):
     return array, meta
 
 
-# ─────────────────────────────────────────────
-# CONVENIENCE: GET PREVIEW (NO DOWNLOAD)
-# ─────────────────────────────────────────────
-
 def fetch_preview_only(lat, lon, year, buffer_km=5.0, sensor=None):
-    """
-    Get only a preview URL (much faster, no download).
-    Returns (url, meta) on success.
-    """
+    """Get only a preview URL (much faster)."""
     image, cfg, region = get_best_image(lat, lon, year, buffer_km, sensor)
     
     if image is None:
@@ -277,7 +327,7 @@ def fetch_preview_only(lat, lon, year, buffer_km=5.0, sensor=None):
     vis_params = {
         "min": 0,
         "max": 0.3,
-        "bands": cfg["bands"][:3]  # RGB bands
+        "bands": cfg["bands"][:3]
     }
     
     url = get_preview_url(image, region, vis_params)
@@ -290,10 +340,6 @@ def fetch_preview_only(lat, lon, year, buffer_km=5.0, sensor=None):
     
     return url, meta
 
-
-# ─────────────────────────────────────────────
-# SAVE TO FILE
-# ─────────────────────────────────────────────
 
 def save_array_to_geotiff(array, meta, output_path):
     """Save numpy array to GeoTIFF."""
