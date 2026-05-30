@@ -7,14 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io, sys, os, tempfile, re
 from datetime import date as _date
-
-import streamlit as st
-
-if "GEE_SERVICE_ACCOUNT" in st.secrets:
-    st.success("✅ GEE secrets loaded")
-    st.write(st.secrets["GEE_SERVICE_ACCOUNT"]["client_email"])
-else:
-    st.error("❌ GEE secrets NOT found")
     
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
