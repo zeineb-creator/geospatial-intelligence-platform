@@ -156,42 +156,51 @@ def fetch_image_as_array(
 
     image = image.clip(aoi)
 
-    try:
-        import requests, zipfile, io, rasterio
+try:
+    import requests, zipfile, io, rasterio, tempfile, os
 
-        url = image.getDownloadURL({
-            "scale": cfg["resolution"],
-            "region": aoi.getInfo(),
-            "format": "GEO_TIFF",
-            "bands": cfg["bands"],
-        })
+    url = image.getDownloadURL({
+        "scale": cfg["resolution"],
+        "region": aoi.getInfo(),
+        "format": "GEO_TIFF",
+        "bands": cfg["bands"],
+    })
 
-        r = requests.get(url, timeout=120)
-        r.raise_for_status()
+    r = requests.get(url, timeout=120)
+    r.raise_for_status()
 
-        bands = []
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            for name in sorted(z.namelist()):
-                if name.endswith(".tif"):
-                    with z.open(name) as f:
-                        with rasterio.open(f) as src:
-                            bands.append(src.read(1).astype(np.float32))
+    bands = []
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        tif_names = sorted([n for n in z.namelist() if n.endswith(".tif")])
+        print(f"[GEE] ZIP contains: {tif_names}")
+        
+        for name in tif_names:
+            # Write to a real temp file — rasterio needs seekable file on disk
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
+                tmp.write(z.read(name))
+                tmp_path = tmp.name
+            try:
+                with rasterio.open(tmp_path) as src:
+                    bands.append(src.read(1).astype(np.float32))
+            finally:
+                os.unlink(tmp_path)
 
-        array = np.stack(bands, axis=0)
-        array = np.clip(array, 0, 1)
-
-        meta = {
-            "sensor": sensor,
-            "year": year,
-            "source": "GEE",
-        }
-
-        print(f"[GEE] Success {array.shape}")
-        return array, meta
-
-    except Exception as e:
-        print(f"[GEE] Download error: {e}")
+    if not bands:
+        print("[GEE] No bands extracted from ZIP")
         return None
+
+    array = np.stack(bands, axis=0)
+    array = np.clip(array, 0, 1)
+
+    meta = {"sensor": sensor, "year": year, "source": "GEE"}
+    print(f"[GEE] Success {array.shape}")
+    return array, meta
+
+except Exception as e:
+    print(f"[GEE] Download error: {e}")
+    import traceback
+    traceback.print_exc()
+    return None
 
 
 # ─────────────────────────────────────────────────────────────
