@@ -172,7 +172,7 @@ def import_error_card(module, err):
 def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
                          land_cover, delta, ndvi_t1_val, ndvi_t2_val,
                          t1_label, t2_label, delta_map, ts_df, ts_trend):
-    """Generate a single unified PDF with all sections combined - compact layout"""
+    """Generate a single unified PDF with all sections combined - ultra compact"""
     
     if not FPDF_AVAILABLE:
         raise ImportError("fpdf2 is not installed. Run: pip install fpdf2")
@@ -182,57 +182,57 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     class PDF(FPDF):
         def header(self):
             if self.page_no() > 1:
-                self.set_font('Helvetica', 'I', 8)
+                self.set_font('Helvetica', 'I', 7)
                 self.set_text_color(100, 100, 100)
-                self.cell(0, 8, 'Geospatial Intelligence Platform', 0, 0, 'L')
-                self.cell(0, 8, f'Page {self.page_no()}', 0, 0, 'R')
-                self.ln(8)
+                self.cell(0, 5, 'Geospatial Intelligence Platform', 0, 0, 'L')
+                self.cell(0, 5, f'Page {self.page_no()}', 0, 0, 'R')
+                self.ln(5)
         
         def footer(self):
-            self.set_y(-12)
-            self.set_font('Helvetica', 'I', 7)
+            self.set_y(-10)
+            self.set_font('Helvetica', 'I', 6)
             self.set_text_color(100, 100, 100)
-            self.cell(0, 8, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}', 0, 0, 'C')
+            self.cell(0, 5, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}', 0, 0, 'C')
         
         def section_title(self, title, level=1):
             title = self._sanitize_text(title)
             if level == 1:
-                self.set_font('Helvetica', 'B', 14)
+                self.set_font('Helvetica', 'B', 13)
                 self.set_text_color(37, 99, 235)
-                self.cell(0, 8, title, 0, 1, 'L')
+                self.cell(0, 6, title, 0, 1, 'L')
                 self.set_draw_color(37, 99, 235)
                 self.line(self.get_x(), self.get_y(), self.get_x() + 190, self.get_y())
-                self.ln(4)
+                self.ln(3)
             else:
-                self.set_font('Helvetica', 'B', 11)
+                self.set_font('Helvetica', 'B', 10)
                 self.set_text_color(0, 0, 0)
-                self.cell(0, 6, title, 0, 1, 'L')
-                self.ln(2)
+                self.cell(0, 5, title, 0, 1, 'L')
+                self.ln(1)
         
         def body_text(self, text):
             text = self._sanitize_text(text)
-            self.set_font('Helvetica', '', 9)
+            self.set_font('Helvetica', '', 8)
             self.set_text_color(0, 0, 0)
-            self.multi_cell(0, 4, text)
-            self.ln(2)
+            self.multi_cell(0, 3.5, text)
+            self.ln(1)
         
         def key_value_row(self, key, value):
             key = self._sanitize_text(key)
             value = self._sanitize_text(str(value))
-            self.set_font('Helvetica', 'B', 8)
+            self.set_font('Helvetica', 'B', 7)
             self.set_text_color(100, 100, 100)
-            self.cell(45, 5, key, 0, 0, 'L')
-            self.set_font('Helvetica', '', 8)
+            self.cell(40, 4, key, 0, 0, 'L')
+            self.set_font('Helvetica', '', 7)
             self.set_text_color(0, 0, 0)
-            self.cell(0, 5, value, 0, 1, 'L')
+            self.cell(0, 4, value, 0, 1, 'L')
         
-        def add_chart(self, fig, width=170, height=90):
+        def add_chart(self, fig, width=170, height=80):
             img_buf = io.BytesIO()
-            fig.savefig(img_buf, format='PNG', dpi=100, bbox_inches='tight')
+            fig.savefig(img_buf, format='PNG', dpi=90, bbox_inches='tight')
             img_buf.seek(0)
             self.image(img_buf, x=(210 - width)/2, w=width, h=height)
             plt.close(fig)
-            self.ln(height + 3)
+            self.ln(height + 2)
         
         def _sanitize_text(self, text):
             """Replace special characters with ASCII equivalents"""
@@ -261,38 +261,38 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     
     # ============ TITLE PAGE ============
     pdf.add_page()
-    pdf.set_y(60)
-    pdf.set_font('Helvetica', 'B', 22)
+    pdf.set_y(50)
+    pdf.set_font('Helvetica', 'B', 20)
     pdf.set_text_color(37, 99, 235)
-    pdf.cell(0, 15, 'Geospatial Intelligence Report', 0, 1, 'C')
+    pdf.cell(0, 12, 'Geospatial Intelligence Report', 0, 1, 'C')
     
     region_name = getattr(ic, "region", None) or ic.image_meta.get("region_name", "Unknown region")
     ecosystem = getattr(ic, "ecosystem", None) or "Unknown"
     temporal_str = (str(t1_label) + " -> " + str(t2_label)) if t1_label and t2_label else "Single image"
     
-    pdf.set_font('Helvetica', '', 11)
+    pdf.set_font('Helvetica', '', 10)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 8, region_name, 0, 1, 'C')
-    pdf.set_font('Helvetica', 'I', 9)
-    pdf.cell(0, 6, ecosystem, 0, 1, 'C')
-    pdf.cell(0, 6, f"Temporal Coverage: {temporal_str}", 0, 1, 'C')
+    pdf.cell(0, 6, region_name, 0, 1, 'C')
+    pdf.set_font('Helvetica', 'I', 8)
+    pdf.cell(0, 5, ecosystem, 0, 1, 'C')
+    pdf.cell(0, 5, f"Temporal Coverage: {temporal_str}", 0, 1, 'C')
     
-    pdf.ln(20)
-    pdf.set_font('Helvetica', '', 8)
+    pdf.ln(15)
+    pdf.set_font('Helvetica', '', 7)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 0, 1, 'C')
+    pdf.cell(0, 4, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 0, 1, 'C')
     
     # ============ SECTION 1: OVERVIEW ============
     pdf.add_page()
     pdf.section_title("1. Executive Overview", level=1)
     
-    # Region details - compact
+    # Region details
     pdf.key_value_row("Region:", region_name)
     pdf.key_value_row("Ecosystem:", ecosystem)
     pdf.key_value_row("Temporal Coverage:", temporal_str)
-    pdf.ln(2)
+    pdf.ln(1)
     
-    # Spectral Indices table
+    # Spectral Indices
     pdf.section_title("Spectral Indices", level=2)
     
     conf = getattr(ic, "confidence_score", 0) or 0
@@ -302,83 +302,83 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     ai_v = getattr(ic, "aridity_index", None)
     
     # Compact table
-    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_font('Helvetica', 'B', 7)
     pdf.set_fill_color(37, 99, 235)
     pdf.set_text_color(255, 255, 255)
-    pdf.cell(45, 6, "Metric", 1, 0, 'C', 1)
-    pdf.cell(35, 6, "Value", 1, 0, 'C', 1)
-    pdf.cell(110, 6, "Interpretation", 1, 1, 'C', 1)
+    pdf.cell(45, 5, "Metric", 1, 0, 'C', 1)
+    pdf.cell(35, 5, "Value", 1, 0, 'C', 1)
+    pdf.cell(110, 5, "Interpretation", 1, 1, 'C', 1)
     
-    pdf.set_font('Helvetica', '', 8)
+    pdf.set_font('Helvetica', '', 7)
     pdf.set_text_color(0, 0, 0)
     pdf.set_fill_color(255, 255, 255)
     
     def format_val(v): return f"{v:.3f}" if v is not None else "N/A"
     
     if ndvi_v is not None:
-        pdf.cell(45, 5, "NDVI", 'LR', 0, 'L')
-        pdf.cell(35, 5, format_val(ndvi_v), 'LR', 0, 'C')
-        pdf.cell(110, 5, "Vegetation Health", 'LR', 1, 'L')
+        pdf.cell(45, 4, "NDVI", 'LR', 0, 'L')
+        pdf.cell(35, 4, format_val(ndvi_v), 'LR', 0, 'C')
+        pdf.cell(110, 4, "Vegetation Health", 'LR', 1, 'L')
     if ndwi_v is not None:
-        pdf.cell(45, 5, "NDWI", 'LR', 0, 'L')
-        pdf.cell(35, 5, format_val(ndwi_v), 'LR', 0, 'C')
-        pdf.cell(110, 5, "Water Content", 'LR', 1, 'L')
+        pdf.cell(45, 4, "NDWI", 'LR', 0, 'L')
+        pdf.cell(35, 4, format_val(ndwi_v), 'LR', 0, 'C')
+        pdf.cell(110, 4, "Water Content", 'LR', 1, 'L')
     if ndbi_v is not None:
-        pdf.cell(45, 5, "NDBI", 'LR', 0, 'L')
-        pdf.cell(35, 5, format_val(ndbi_v), 'LR', 0, 'C')
-        pdf.cell(110, 5, "Built-up Surfaces", 'LR', 1, 'L')
+        pdf.cell(45, 4, "NDBI", 'LR', 0, 'L')
+        pdf.cell(35, 4, format_val(ndbi_v), 'LR', 0, 'C')
+        pdf.cell(110, 4, "Built-up Surfaces", 'LR', 1, 'L')
     if ai_v is not None:
-        pdf.cell(45, 5, "Aridity Index", 'LR', 0, 'L')
-        pdf.cell(35, 5, format_val(ai_v), 'LR', 0, 'C')
-        pdf.cell(110, 5, "Dryness Indicator", 'LR', 1, 'L')
-    pdf.cell(45, 5, "Confidence", 'LR', 0, 'L')
-    pdf.cell(35, 5, f"{conf:.0f}%", 'LR', 0, 'C')
-    pdf.cell(110, 5, f"{'High' if conf >= 75 else 'Moderate' if conf >= 55 else 'Low'} reliability", 'LR', 1, 'L')
+        pdf.cell(45, 4, "Aridity Index", 'LR', 0, 'L')
+        pdf.cell(35, 4, format_val(ai_v), 'LR', 0, 'C')
+        pdf.cell(110, 4, "Dryness Indicator", 'LR', 1, 'L')
+    pdf.cell(45, 4, "Confidence", 'LR', 0, 'L')
+    pdf.cell(35, 4, f"{conf:.0f}%", 'LR', 0, 'C')
+    pdf.cell(110, 4, f"{'High' if conf >= 75 else 'Moderate' if conf >= 55 else 'Low'} reliability", 'LR', 1, 'L')
     if delta is not None:
         sign = "+" if delta >= 0 else ""
-        pdf.cell(45, 5, "Delta NDVI", 'LR', 0, 'L')
-        pdf.cell(35, 5, f"{sign}{delta:.3f}", 'LR', 0, 'C')
-        pdf.cell(110, 5, f"{'Vegetation gain' if delta > 0 else 'Vegetation loss' if delta < 0 else 'Stable'}", 'LR', 1, 'L')
+        pdf.cell(45, 4, "Delta NDVI", 'LR', 0, 'L')
+        pdf.cell(35, 4, f"{sign}{delta:.3f}", 'LR', 0, 'C')
+        pdf.cell(110, 4, f"{'Vegetation gain' if delta > 0 else 'Vegetation loss' if delta < 0 else 'Stable'}", 'LR', 1, 'L')
     
     pdf.cell(190, 0, '', 'T')
-    pdf.ln(3)
+    pdf.ln(2)
     
-    # Land Cover - compact
+    # Land Cover
     if land_cover:
         pdf.section_title("Land Cover Breakdown", level=2)
-        pdf.set_font('Helvetica', 'B', 8)
+        pdf.set_font('Helvetica', 'B', 7)
         pdf.set_fill_color(37, 99, 235)
         pdf.set_text_color(255, 255, 255)
-        pdf.cell(60, 6, "Class", 1, 0, 'C', 1)
-        pdf.cell(130, 6, "Coverage", 1, 1, 'C', 1)
+        pdf.cell(60, 5, "Class", 1, 0, 'C', 1)
+        pdf.cell(130, 5, "Coverage", 1, 1, 'C', 1)
         
-        pdf.set_font('Helvetica', '', 8)
+        pdf.set_font('Helvetica', '', 7)
         pdf.set_text_color(0, 0, 0)
         for cls, pct in land_cover.items():
-            pdf.cell(60, 5, cls.capitalize(), 'LR', 0, 'L')
-            pdf.cell(130, 5, f"{pct:.1f}%", 'LR', 1, 'L')
+            pdf.cell(60, 4, cls.capitalize(), 'LR', 0, 'L')
+            pdf.cell(130, 4, f"{pct:.1f}%", 'LR', 1, 'L')
         pdf.cell(190, 0, '', 'T')
-        pdf.ln(3)
+        pdf.ln(2)
     
     # Confidence bar
     pdf.section_title("Confidence Assessment", level=2)
     conf_bar_length = int(conf / 5)
     conf_bar = "#" * conf_bar_length + "." * (20 - conf_bar_length)
     pdf.body_text(f"Confidence Score: {conf:.0f}%")
-    pdf.set_font('Courier', '', 8)
-    pdf.cell(0, 4, conf_bar, 0, 1)
-    pdf.ln(2)
+    pdf.set_font('Courier', '', 7)
+    pdf.cell(0, 3, conf_bar, 0, 1)
+    pdf.ln(1)
     
-    # Image Metadata - compact
+    # Image Metadata
     pdf.section_title("Image Metadata", level=2)
     meta = ic.image_meta
     pdf.key_value_row("Format:", getattr(ic, "image_format", "N/A"))
     pdf.key_value_row("Bands:", getattr(ic, "n_bands", "N/A"))
     pdf.key_value_row("Dimensions:", f"{meta.get('width','?')} x {meta.get('height','?')} px")
     pdf.key_value_row("CRS:", meta.get("crs", "N/A"))
-    pdf.ln(2)
+    pdf.ln(1)
     
-    # Climate Summary - compact
+    # Climate Summary
     cs = getattr(ic, "climate_summary", None)
     if cs:
         pdf.section_title("Climate Snapshot", level=2)
@@ -386,7 +386,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         pdf.key_value_row("Rainfall trend:", cs.get('rainfall_mm_trend', 'N/A'))
         pdf.key_value_row("Temperature:", f"{cs.get('temperature_c_latest', 0):.1f} C")
         pdf.key_value_row("Humidity:", f"{cs.get('humidity_pct_latest', 0):.1f} %")
-        pdf.ln(2)
+        pdf.ln(1)
     
     # Anomalies
     anomalies = getattr(ic, "anomalies", None)
@@ -398,79 +398,90 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     # ============ SECTION 2: INDEX MAPS ============
     pdf.add_page()
     pdf.section_title("2. Spectral Index Maps", level=1)
+    pdf.ln(1)
     
-    # NDVI Map
+    # NDVI Map - no extra spacing
     if ndvi_map is not None:
-        pdf.section_title("NDVI - Vegetation Density", level=2)
-        fig, ax = plt.subplots(figsize=(8, 5))
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 5, "NDVI - Vegetation Density", 0, 1, 'L')
+        fig, ax = plt.subplots(figsize=(8, 4.5))
         im = ax.imshow(ndvi_map, cmap='RdYlGn', vmin=-1, vmax=1, aspect='auto')
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title("NDVI - Higher values = healthier vegetation", fontsize=9)
+        ax.set_title("NDVI - Higher values = healthier vegetation", fontsize=8)
         ax.axis('off')
-        pdf.add_chart(fig, width=170, height=90)
-        pdf.ln(1)
+        pdf.add_chart(fig, width=170, height=75)
     
     # NDWI Map
     if ndwi_map is not None:
-        pdf.section_title("NDWI - Water Content", level=2)
-        fig, ax = plt.subplots(figsize=(8, 5))
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 5, "NDWI - Water Content", 0, 1, 'L')
+        fig, ax = plt.subplots(figsize=(8, 4.5))
         im = ax.imshow(ndwi_map, cmap='Blues_r', vmin=-1, vmax=1, aspect='auto')
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title("NDWI - Positive values indicate water presence", fontsize=9)
+        ax.set_title("NDWI - Positive values indicate water presence", fontsize=8)
         ax.axis('off')
-        pdf.add_chart(fig, width=170, height=90)
-        pdf.ln(1)
+        pdf.add_chart(fig, width=170, height=75)
     
     # NDBI Map
     if ndbi_map is not None:
-        pdf.section_title("NDBI - Built-up Surfaces", level=2)
-        fig, ax = plt.subplots(figsize=(8, 5))
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 5, "NDBI - Built-up Surfaces", 0, 1, 'L')
+        fig, ax = plt.subplots(figsize=(8, 4.5))
         im = ax.imshow(ndbi_map, cmap='YlOrRd', vmin=-1, vmax=1, aspect='auto')
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title("NDBI - Higher values = more urban surfaces", fontsize=9)
+        ax.set_title("NDBI - Higher values = more urban surfaces", fontsize=8)
         ax.axis('off')
-        pdf.add_chart(fig, width=170, height=90)
-        pdf.ln(1)
+        pdf.add_chart(fig, width=170, height=75)
     
-    # Temporal NDVI Comparison
+    # Temporal NDVI Comparison - compact
     if delta is not None and ndvi_t1_val is not None and ndvi_t2_val is not None:
-        pdf.section_title("Temporal NDVI Comparison", level=2)
+        pdf.ln(1)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 5, "Temporal NDVI Comparison", 0, 1, 'L')
         pdf.key_value_row(str(t1_label or "Image 1") + ":", f"{ndvi_t1_val:.3f}")
         pdf.key_value_row(str(t2_label or "Image 2") + ":", f"{ndvi_t2_val:.3f}")
         pdf.key_value_row("Change (Delta NDVI):", f"{'+' if delta >= 0 else ''}{delta:.3f}")
-        pdf.ln(1)
     
     # Delta NDVI Map
     if delta_map is not None:
-        pdf.section_title("Delta NDVI - Vegetation Change Map", level=2)
-        fig, ax = plt.subplots(figsize=(8, 5))
+        pdf.ln(1)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 5, "Delta NDVI - Vegetation Change Map", 0, 1, 'L')
+        fig, ax = plt.subplots(figsize=(8, 4.5))
         im = ax.imshow(delta_map, cmap='RdYlGn', vmin=-1, vmax=1, aspect='auto')
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title("Delta NDVI - Green: gain, Red: loss", fontsize=9)
+        ax.set_title("Delta NDVI - Green: gain, Red: loss", fontsize=8)
         ax.axis('off')
-        pdf.add_chart(fig, width=170, height=90)
-        pdf.ln(1)
+        pdf.add_chart(fig, width=170, height=75)
     
     # Time Series
     if ts_df is not None and len(ts_df) > 1:
-        pdf.section_title("NDVI Time Series (Annual)", level=2)
+        pdf.ln(1)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 5, "NDVI Time Series (Annual)", 0, 1, 'L')
         try:
             from time_series import render_time_series_chart
             fig_ts = render_time_series_chart(
                 ts_df, ts_trend or {},
                 ecosystem=getattr(ic,"ecosystem","") or ""
             )
-            pdf.add_chart(fig_ts, width=170, height=80)
+            pdf.add_chart(fig_ts, width=170, height=70)
             if ts_trend:
-                pdf.body_text(f"Trend: {ts_trend.get('trend', 'N/A')} | "
-                            f"Rate: {ts_trend.get('annual_rate', 0):+.4f}/yr | "
-                            f"Total change: {ts_trend.get('total_change', 0):+.3f}")
+                pdf.set_font('Helvetica', '', 7)
+                pdf.cell(0, 3, f"Trend: {ts_trend.get('trend', 'N/A')} | Rate: {ts_trend.get('annual_rate', 0):+.4f}/yr", 0, 1, 'C')
         except Exception as e:
             pdf.body_text(f"Time series data available")
     
     # ============ SECTION 3: AI REPORT ============
     pdf.add_page()
     pdf.section_title("3. AI-Generated Scientific Report", level=1)
+    pdf.ln(1)
     
     if report_text:
         # Clean and format the report
@@ -498,7 +509,10 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         
         if sections:
             for title, content in sections.items():
-                pdf.section_title(title, level=2)
+                pdf.set_font('Helvetica', 'B', 9)
+                pdf.set_text_color(37, 99, 235)
+                pdf.cell(0, 5, pdf._sanitize_text(title), 0, 1, 'L')
+                pdf.ln(1)
                 # Remove markdown formatting
                 clean = re.sub(r'\*\*(.*?)\*\*', r'\1', content)
                 # Split into paragraphs
