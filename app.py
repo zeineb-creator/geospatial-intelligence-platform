@@ -243,7 +243,8 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
                 '🗺️': '', '⚖️': '', '🛰️': '', '🔍': '', '📡': '',
                 '📋': '', '🌡️': '', '☀️': '', '✓': '[OK]', '✅': '[OK]',
                 '❌': '[X]', '⚠️': '[!]', '°': 'deg', '©': '(c)',
-                '®': '(r)', '™': '(tm)', '…': '...',
+                '®': '(r)', '™': '(tm)', '…': '...', '█': '#', '░': '.',
+                '×': 'x', '−': '-', '±': '+/-',
             }
             for old, new in replacements.items():
                 text = text.replace(old, new)
@@ -353,9 +354,10 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         pdf.cell(190, 0, '', 'T')
         pdf.ln(5)
     
-    # Confidence bar (text representation)
+    # Confidence bar (text representation - using ASCII characters only)
     pdf.section_title("Confidence Assessment", level=2)
-    conf_bar = "█" * int(conf / 5) + "░" * (20 - int(conf / 5))
+    conf_bar_length = int(conf / 5)
+    conf_bar = "#" * conf_bar_length + "." * (20 - conf_bar_length)
     pdf.body_text(f"Confidence Score: {conf:.0f}%")
     pdf.set_font('Courier', '', 9)
     pdf.cell(0, 6, conf_bar, 0, 1)
