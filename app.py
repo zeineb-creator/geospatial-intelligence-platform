@@ -180,9 +180,16 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     from datetime import datetime
     
     class PDF(FPDF):
+        def __init__(self):
+            super().__init__()
+            # Add Unicode font support
+            self.add_font('DejaVu', '', 'DejaVuSansCondensed.ttf', uni=True)
+            self.add_font('DejaVu', 'B', 'DejaVuSansCondensed-Bold.ttf', uni=True)
+            self.add_font('DejaVu', 'I', 'DejaVuSansCondensed-Oblique.ttf', uni=True)
+        
         def header(self):
             if self.page_no() > 1:
-                self.set_font('Helvetica', 'I', 8)
+                self.set_font('DejaVu', 'I', 8)
                 self.set_text_color(100, 100, 100)
                 self.cell(0, 10, 'Geospatial Intelligence Platform', 0, 0, 'L')
                 self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'R')
@@ -190,37 +197,42 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         
         def footer(self):
             self.set_y(-15)
-            self.set_font('Helvetica', 'I', 8)
+            self.set_font('DejaVu', 'I', 8)
             self.set_text_color(100, 100, 100)
             self.cell(0, 10, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}', 0, 0, 'C')
         
         def section_title(self, title, level=1):
+            # Remove special characters that might cause issues
+            title = self._sanitize_text(title)
             if level == 1:
-                self.set_font('Helvetica', 'B', 16)
+                self.set_font('DejaVu', 'B', 16)
                 self.set_text_color(37, 99, 235)
                 self.cell(0, 10, title, 0, 1, 'L')
                 self.set_draw_color(37, 99, 235)
                 self.line(self.get_x(), self.get_y(), self.get_x() + 190, self.get_y())
                 self.ln(5)
             else:
-                self.set_font('Helvetica', 'B', 12)
+                self.set_font('DejaVu', 'B', 12)
                 self.set_text_color(0, 0, 0)
                 self.cell(0, 8, title, 0, 1, 'L')
                 self.ln(3)
         
         def body_text(self, text):
-            self.set_font('Helvetica', '', 10)
+            text = self._sanitize_text(text)
+            self.set_font('DejaVu', '', 10)
             self.set_text_color(0, 0, 0)
             self.multi_cell(0, 5, text)
             self.ln(3)
         
         def key_value_row(self, key, value):
-            self.set_font('Helvetica', 'B', 9)
+            key = self._sanitize_text(key)
+            value = self._sanitize_text(str(value))
+            self.set_font('DejaVu', 'B', 9)
             self.set_text_color(100, 100, 100)
             self.cell(50, 6, key, 0, 0, 'L')
-            self.set_font('Helvetica', '', 9)
+            self.set_font('DejaVu', '', 9)
             self.set_text_color(0, 0, 0)
-            self.cell(0, 6, str(value), 0, 1, 'L')
+            self.cell(0, 6, value, 0, 1, 'L')
         
         def add_chart(self, fig, width=180, height=100):
             img_buf = io.BytesIO()
@@ -229,29 +241,64 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
             self.image(img_buf, x=(210 - width)/2, w=width, h=height)
             plt.close(fig)
             self.ln(height + 5)
+        
+        def _sanitize_text(self, text):
+            """Replace special characters with ASCII equivalents"""
+            replacements = {
+                '→': '->',
+                '←': '<-',
+                '↑': '^',
+                '↓': 'v',
+                '•': '*',
+                '—': '-',
+                '–': '-',
+                '⚠': '!',
+                '📍': '',
+                '📅': '',
+                '🌿': '',
+                '💧': '',
+                '🏙️': '',
+                '📈': '',
+                '🏜️': '',
+                '🗺️': '',
+                '⚖️': '',
+                '🛰️': '',
+                '🔍': '',
+                '📡': '',
+                '📋': '',
+                '🌡️': '',
+                '☀️': '',
+                '✓': '[OK]',
+                '✅': '[OK]',
+                '❌': '[X]',
+                '⚠️': '[!]',
+            }
+            for old, new in replacements.items():
+                text = text.replace(old, new)
+            return text
     
     pdf = PDF()
     pdf.add_page()
     
     # ============ TITLE PAGE ============
     pdf.set_y(50)
-    pdf.set_font('Helvetica', 'B', 24)
+    pdf.set_font('DejaVu', 'B', 24)
     pdf.set_text_color(37, 99, 235)
     pdf.cell(0, 20, 'Geospatial Intelligence Report', 0, 1, 'C')
     
     region_name = getattr(ic, "region", None) or ic.image_meta.get("region_name", "Unknown region")
     ecosystem = getattr(ic, "ecosystem", None) or "Unknown"
-    temporal_str = (str(t1_label) + " → " + str(t2_label)) if t1_label and t2_label else "Single image"
+    temporal_str = (str(t1_label) + " -> " + str(t2_label)) if t1_label and t2_label else "Single image"
     
-    pdf.set_font('Helvetica', '', 12)
+    pdf.set_font('DejaVu', '', 12)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 10, region_name, 0, 1, 'C')
-    pdf.set_font('Helvetica', 'I', 10)
+    pdf.set_font('DejaVu', 'I', 10)
     pdf.cell(0, 8, ecosystem, 0, 1, 'C')
     pdf.cell(0, 8, f"Temporal Coverage: {temporal_str}", 0, 1, 'C')
     
     pdf.ln(30)
-    pdf.set_font('Helvetica', '', 9)
+    pdf.set_font('DejaVu', '', 9)
     pdf.set_text_color(100, 100, 100)
     pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 0, 1, 'C')
     
@@ -260,7 +307,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     pdf.section_title("1. Executive Overview", level=1)
     
     # Region details
-    pdf.section_title("Location & Context", level=2)
+    pdf.section_title("Location and Context", level=2)
     pdf.key_value_row("Region:", region_name)
     pdf.key_value_row("Ecosystem:", ecosystem)
     pdf.key_value_row("Temporal Coverage:", temporal_str)
@@ -276,14 +323,14 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     ai_v = getattr(ic, "aridity_index", None)
     
     # Create table for indices
-    pdf.set_font('Helvetica', 'B', 9)
+    pdf.set_font('DejaVu', 'B', 9)
     pdf.set_fill_color(37, 99, 235)
     pdf.set_text_color(255, 255, 255)
     pdf.cell(50, 8, "Metric", 1, 0, 'C', 1)
     pdf.cell(40, 8, "Value", 1, 0, 'C', 1)
     pdf.cell(100, 8, "Interpretation", 1, 1, 'C', 1)
     
-    pdf.set_font('Helvetica', '', 9)
+    pdf.set_font('DejaVu', '', 9)
     pdf.set_text_color(0, 0, 0)
     pdf.set_fill_color(255, 255, 255)
     
@@ -306,7 +353,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
                 "Data reliability - High" if conf >= 75 else "Moderate" if conf >= 55 else "Low"))
     if delta is not None:
         sign = "+" if delta >= 0 else ""
-        rows.append(("ΔNDVI", f"{sign}{delta:.3f}",
+        rows.append(("Delta NDVI", f"{sign}{delta:.3f}",
                     "Vegetation gain" if delta > 0 else "Vegetation loss" if delta < 0 else "Stable"))
     
     for row in rows:
@@ -320,13 +367,13 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     # Land Cover
     if land_cover:
         pdf.section_title("Land Cover Breakdown", level=2)
-        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_font('DejaVu', 'B', 9)
         pdf.set_fill_color(37, 99, 235)
         pdf.set_text_color(255, 255, 255)
         pdf.cell(60, 8, "Class", 1, 0, 'C', 1)
         pdf.cell(130, 8, "Coverage", 1, 1, 'C', 1)
         
-        pdf.set_font('Helvetica', '', 9)
+        pdf.set_font('DejaVu', '', 9)
         pdf.set_text_color(0, 0, 0)
         for cls, pct in land_cover.items():
             pdf.cell(60, 7, cls.capitalize(), 'LR', 0, 'L')
@@ -347,7 +394,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     meta = ic.image_meta
     pdf.key_value_row("Format:", getattr(ic, "image_format", "N/A"))
     pdf.key_value_row("Bands:", getattr(ic, "n_bands", "N/A"))
-    pdf.key_value_row("Dimensions:", f"{meta.get('width','?')} × {meta.get('height','?')} px")
+    pdf.key_value_row("Dimensions:", f"{meta.get('width','?')} x {meta.get('height','?')} px")
     pdf.key_value_row("CRS:", meta.get("crs", "N/A"))
     pdf.key_value_row("Sensor:", meta.get("sensor", "N/A"))
     if meta.get("region_context"):
@@ -360,7 +407,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         pdf.section_title("Climate Snapshot", level=2)
         pdf.key_value_row("Rainfall (latest):", f"{cs.get('rainfall_mm_latest', 0):.1f} mm")
         pdf.key_value_row("Rainfall trend:", cs.get('rainfall_mm_trend', 'N/A'))
-        pdf.key_value_row("Temperature:", f"{cs.get('temperature_c_latest', 0):.1f} °C")
+        pdf.key_value_row("Temperature:", f"{cs.get('temperature_c_latest', 0):.1f} C")
         pdf.key_value_row("Humidity:", f"{cs.get('humidity_pct_latest', 0):.1f} %")
         pdf.ln(5)
     
@@ -369,7 +416,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     if anomalies:
         pdf.section_title("Detected Anomalies", level=2)
         for a in anomalies:
-            pdf.body_text(f"⚠ {a}")
+            pdf.body_text(f"[!] {a}")
     
     # ============ SECTION 2: INDEX MAPS ============
     pdf.add_page()
@@ -420,8 +467,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         pdf.section_title("Temporal NDVI Comparison", level=2)
         pdf.key_value_row(str(t1_label or "Image 1") + ":", f"{ndvi_t1_val:.3f}")
         pdf.key_value_row(str(t2_label or "Image 2") + ":", f"{ndvi_t2_val:.3f}")
-        change_color = "green" if delta >= 0 else "red"
-        pdf.key_value_row("Change (ΔNDVI):", 
+        pdf.key_value_row("Change (Delta NDVI):", 
                          f"{'+' if delta >= 0 else ''}{delta:.3f}")
         pdf.body_text(f"Interpretation: {'Vegetation gain' if delta > 0 else 'Vegetation loss' if delta < 0 else 'Stable vegetation'}")
         pdf.ln(5)
@@ -432,7 +478,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         fig, ax = plt.subplots(figsize=(8, 6))
         im = ax.imshow(delta_map, cmap='RdYlGn', vmin=-1, vmax=1, aspect='auto')
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title("ΔNDVI - Green: gain, Red: loss", fontsize=10)
+        ax.set_title("Delta NDVI - Green: gain, Red: loss", fontsize=10)
         ax.axis('off')
         pdf.add_chart(fig, width=170, height=110)
         pdf.body_text("The Delta NDVI map shows vegetation change over time. "
@@ -453,7 +499,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
                 pdf.body_text(f"Trend: {ts_trend.get('trend', 'N/A')} | "
                             f"Rate: {ts_trend.get('annual_rate', 0):+.4f}/yr | "
                             f"Total change: {ts_trend.get('total_change', 0):+.3f} | "
-                            f"R²: {ts_trend.get('r2', 0):.2f}")
+                            f"R2: {ts_trend.get('r2', 0):.2f}")
         except Exception as e:
             pdf.body_text(f"Time series data available but chart generation failed: {str(e)}")
     
@@ -495,7 +541,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
                     para = para.strip()
                     if para:
                         if para.startswith("* ") or para.startswith("- "):
-                            para = "• " + para[2:]
+                            para = "* " + para[2:]
                         pdf.body_text(para)
                 pdf.ln(3)
         else:
@@ -509,7 +555,7 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     
     # ============ FOOTER NOTE ============
     pdf.ln(10)
-    pdf.set_font('Helvetica', 'I', 8)
+    pdf.set_font('DejaVu', 'I', 8)
     pdf.set_text_color(100, 100, 100)
     pdf.cell(0, 6, "Report generated by Geospatial Intelligence Platform", 0, 1, 'C')
     pdf.cell(0, 6, "Data sources: Sentinel-2 / Landsat, NASA POWER", 0, 1, 'C')
