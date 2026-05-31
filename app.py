@@ -236,18 +236,75 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         
         def _sanitize_text(self, text):
             """Replace special characters with ASCII equivalents"""
+            text = str(text)
             replacements = {
-                '→': '->', '←': '<-', '↑': '^', '↓': 'v', '•': '*',
-                '—': '-', '–': '-', '⚠': '!', '📍': '', '📅': '',
-                '🌿': '', '💧': '', '🏙️': '', '📈': '', '🏜️': '',
-                '🗺️': '', '⚖️': '', '🛰️': '', '🔍': '', '📡': '',
-                '📋': '', '🌡️': '', '☀️': '', '✓': '[OK]', '✅': '[OK]',
-                '❌': '[X]', '⚠️': '[!]', '°': 'deg', '©': '(c)',
-                '®': '(r)', '™': '(tm)', '…': '...', '█': '#', '░': '.',
-                '×': 'x', '−': '-', '±': '+/-',
+                # Greek letters
+                'Δ': 'Delta',
+                'δ': 'delta',
+                'α': 'alpha',
+                'β': 'beta',
+                'γ': 'gamma',
+                'θ': 'theta',
+                'λ': 'lambda',
+                'μ': 'mu',
+                'π': 'pi',
+                'σ': 'sigma',
+                'τ': 'tau',
+                'ω': 'omega',
+                # Arrows and symbols
+                '→': '->', 
+                '←': '<-', 
+                '↑': '^', 
+                '↓': 'v', 
+                '•': '*',
+                '—': '-', 
+                '–': '-', 
+                '⚠': '!', 
+                '→': '->',
+                # Emojis and icons
+                '📍': '', 
+                '📅': '',
+                '🌿': '', 
+                '💧': '', 
+                '🏙️': '', 
+                '📈': '', 
+                '🏜️': '',
+                '🗺️': '', 
+                '⚖️': '', 
+                '🛰️': '', 
+                '🔍': '', 
+                '📡': '',
+                '📋': '', 
+                '🌡️': '', 
+                '☀️': '', 
+                # Checkmarks and crosses
+                '✓': '[OK]', 
+                '✅': '[OK]',
+                '❌': '[X]', 
+                '⚠️': '[!]',
+                # Other symbols
+                '°': 'deg', 
+                '©': '(c)',
+                '®': '(r)', 
+                '™': '(tm)', 
+                '…': '...', 
+                '█': '#', 
+                '░': '.',
+                '×': 'x', 
+                '−': '-', 
+                '±': '+/-',
+                '®': '(R)',
+                '™': '(TM)',
+                '℃': 'C',
+                '℉': 'F',
+                '€': 'EUR',
+                '£': 'GBP',
+                '$': 'USD',
             }
             for old, new in replacements.items():
                 text = text.replace(old, new)
+            # Remove any remaining non-ASCII characters
+            text = ''.join(char for char in text if ord(char) < 128)
             return text
     
     pdf = PDF()
@@ -536,7 +593,6 @@ def generate_unified_pdf(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
     
     # Output PDF
     return bytes(pdf.output())
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # USER GUIDE
