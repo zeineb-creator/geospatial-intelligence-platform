@@ -1,10 +1,5 @@
 """
 app.py — Multimodal Geospatial Intelligence Platform
-Changes vs previous version:
-  1. User guide added (plain-language index explanations)
-  2. Three tabs preserved: Overview | Index Maps | Full Report
-  3. Full Report tab = Overview content + Index Maps content + AI report + PDF download
-  4. Secret key debug block replaced with safe credential check (no raw key values shown)
 """
 
 import streamlit as st
@@ -15,7 +10,6 @@ import matplotlib.pyplot as plt
 import io, sys, os, tempfile, re
 from datetime import date as _date
 
-# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Geospatial Intelligence Platform",
     page_icon="🛰️",
@@ -23,76 +17,54 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
-
-html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
-.stApp { background-color: #f5f7fa; color: #1a1f2e; }
-
-section[data-testid="stSidebar"] { background-color:#ffffff; border-right:1px solid #dde3ed; }
+html,body,[class*="css"]{font-family:'IBM Plex Sans',sans-serif;}
+.stApp{background-color:#f5f7fa;color:#1a1f2e;}
+section[data-testid="stSidebar"]{background-color:#ffffff;border-right:1px solid #dde3ed;}
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
 section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] div.stMarkdown { color:#1a1f2e !important; }
-
-h1,h2,h3 { font-family:'IBM Plex Mono',monospace !important; letter-spacing:-0.02em; }
-h1 { font-size:1.6rem !important; color:#1a1f2e !important; }
-h2 { font-size:1.05rem !important; color:#2563eb !important; border-bottom:1px solid #dde3ed; padding-bottom:0.4rem; }
-h3 { font-size:0.95rem !important; color:#3b82f6 !important; }
-
-.geo-card          { background:#ffffff; border:1px solid #dde3ed; border-radius:8px; padding:1.1rem 1.3rem; margin-bottom:1rem; }
-.geo-card-accent   { border-left:3px solid #2563eb; }
-.geo-card-warn     { border-left:3px solid #d97706; background:#fffbeb; }
-.geo-card-good     { border-left:3px solid #16a34a; background:#f0fdf4; }
-.geo-card-error    { border-left:3px solid #dc2626; background:#fef2f2; }
-.geo-card-guide    { border-left:3px solid #7c3aed; background:#f5f3ff; }
-
-.metric-row  { display:flex; gap:0.8rem; flex-wrap:wrap; margin:0.6rem 0; }
-.metric-chip { background:#f0f4ff; border-radius:6px; padding:0.5rem 0.9rem; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#2563eb; border:1px solid #c7d7fc; }
-.metric-chip span { color:#1a1f2e; font-weight:600; margin-left:0.4rem; }
-
-.conf-bar-container { background:#e5e7eb; border-radius:999px; height:8px; width:100%; overflow:hidden; margin-top:0.4rem; }
-.conf-bar-fill      { height:100%; border-radius:999px; transition:width 0.8s ease; }
-
-.anomaly-tag { display:inline-block; background:#fffbeb; border:1px solid #d97706; border-radius:4px; padding:0.25rem 0.6rem; font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#92400e; margin:0.2rem 0.2rem 0.2rem 0; }
-
-.report-section          { background:#ffffff; border:1px solid #dde3ed; border-radius:6px; padding:1rem 1.3rem; margin-bottom:0.8rem; font-size:0.88rem; line-height:1.75; color:#374151; }
-.report-section h4       { font-family:'IBM Plex Mono',monospace; color:#2563eb; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; margin:0 0 0.6rem 0; }
-
-.guide-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:0.75rem; margin-top:0.8rem; }
-.guide-chip { background:#ffffff; border:1px solid #dde3ed; border-radius:8px; padding:0.8rem 1rem; font-size:0.82rem; line-height:1.6; color:#374151; }
-.guide-chip strong { display:block; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#7c3aed; margin-bottom:0.25rem; letter-spacing:0.04em; }
-.guide-scale { display:flex; gap:0.3rem; margin-top:0.5rem; font-size:0.7rem; font-family:'IBM Plex Mono',monospace; }
-.guide-scale-block { flex:1; height:6px; border-radius:3px; }
-
-.lc-bar    { display:flex; border-radius:4px; overflow:hidden; height:14px; width:100%; }
-.lc-water  { background:#3b82f6; }
-.lc-veg    { background:#22c55e; }
-.lc-urban  { background:#f59e0b; }
-.lc-barren { background:#94a3b8; }
-
-.label-mono  { font-family:'IBM Plex Mono',monospace; font-size:0.70rem; color:#6b7280; text-transform:uppercase; letter-spacing:0.1em; }
-.geo-divider { border:none; border-top:1px solid #dde3ed; margin:1.2rem 0; }
-
-[data-testid="stFileUploader"] { background:#f8fafc !important; border:1px dashed #c7d7fc !important; border-radius:8px !important; }
-
-.stButton>button { background:#2563eb !important; color:#fff !important; border:none !important; border-radius:6px !important; font-family:'IBM Plex Mono',monospace !important; font-size:0.85rem !important; padding:0.5rem 1.5rem !important; }
-.stButton>button:hover { background:#1d4ed8 !important; }
-
-.stTabs [data-baseweb="tab"]  { font-family:'IBM Plex Mono',monospace; font-size:0.8rem; color:#6b7280; }
-.stTabs [aria-selected="true"] { color:#2563eb !important; border-bottom-color:#2563eb !important; }
-
-.streamlit-expanderHeader { font-family:'IBM Plex Mono',monospace !important; font-size:0.82rem !important; color:#2563eb !important; background:#f8fafc !important; }
-
-.meta-row { display:flex; justify-content:space-between; padding:0.35rem 0; border-bottom:1px solid #f0f4ff; font-size:0.82rem; }
-
-#MainMenu { visibility:hidden; }
-footer    { visibility:hidden; }
-[data-testid="collapsedControl"]        { visibility:visible !important; display:flex !important; }
-button[kind="header"]                   { visibility:visible !important; }
-[data-testid="stSidebarCollapseButton"] { visibility:visible !important; }
+section[data-testid="stSidebar"] div.stMarkdown{color:#1a1f2e !important;}
+h1,h2,h3{font-family:'IBM Plex Mono',monospace !important;letter-spacing:-0.02em;}
+h1{font-size:1.6rem !important;color:#1a1f2e !important;}
+h2{font-size:1.05rem !important;color:#2563eb !important;border-bottom:1px solid #dde3ed;padding-bottom:0.4rem;}
+h3{font-size:0.95rem !important;color:#3b82f6 !important;}
+.geo-card{background:#ffffff;border:1px solid #dde3ed;border-radius:8px;padding:1.1rem 1.3rem;margin-bottom:1rem;}
+.geo-card-accent{border-left:3px solid #2563eb;}
+.geo-card-warn{border-left:3px solid #d97706;background:#fffbeb;}
+.geo-card-good{border-left:3px solid #16a34a;background:#f0fdf4;}
+.geo-card-error{border-left:3px solid #dc2626;background:#fef2f2;}
+.geo-card-guide{border-left:3px solid #7c3aed;background:#f5f3ff;}
+.metric-row{display:flex;gap:0.8rem;flex-wrap:wrap;margin:0.6rem 0;}
+.metric-chip{background:#f0f4ff;border-radius:6px;padding:0.5rem 0.9rem;font-family:'IBM Plex Mono',monospace;font-size:0.78rem;color:#2563eb;border:1px solid #c7d7fc;}
+.metric-chip span{color:#1a1f2e;font-weight:600;margin-left:0.4rem;}
+.conf-bar-container{background:#e5e7eb;border-radius:999px;height:8px;width:100%;overflow:hidden;margin-top:0.4rem;}
+.conf-bar-fill{height:100%;border-radius:999px;transition:width 0.8s ease;}
+.anomaly-tag{display:inline-block;background:#fffbeb;border:1px solid #d97706;border-radius:4px;padding:0.25rem 0.6rem;font-family:'IBM Plex Mono',monospace;font-size:0.75rem;color:#92400e;margin:0.2rem 0.2rem 0.2rem 0;}
+.report-section{background:#ffffff;border:1px solid #dde3ed;border-radius:6px;padding:1rem 1.3rem;margin-bottom:0.8rem;font-size:0.88rem;line-height:1.75;color:#374151;}
+.report-section h4{font-family:'IBM Plex Mono',monospace;color:#2563eb;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 0.6rem 0;}
+.guide-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:0.75rem;margin-top:0.8rem;}
+.guide-chip{background:#ffffff;border:1px solid #dde3ed;border-radius:8px;padding:0.8rem 1rem;font-size:0.82rem;line-height:1.6;color:#374151;}
+.guide-chip strong{display:block;font-family:'IBM Plex Mono',monospace;font-size:0.78rem;color:#7c3aed;margin-bottom:0.25rem;letter-spacing:0.04em;}
+.guide-scale{display:flex;gap:0.3rem;margin-top:0.5rem;font-size:0.7rem;font-family:'IBM Plex Mono',monospace;}
+.guide-scale-block{flex:1;height:6px;border-radius:3px;}
+.lc-bar{display:flex;border-radius:4px;overflow:hidden;height:14px;width:100%;}
+.lc-water{background:#3b82f6;}.lc-veg{background:#22c55e;}.lc-urban{background:#f59e0b;}.lc-barren{background:#94a3b8;}
+.label-mono{font-family:'IBM Plex Mono',monospace;font-size:0.70rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;}
+.geo-divider{border:none;border-top:1px solid #dde3ed;margin:1.2rem 0;}
+[data-testid="stFileUploader"]{background:#f8fafc !important;border:1px dashed #c7d7fc !important;border-radius:8px !important;}
+.stButton>button{background:#2563eb !important;color:#fff !important;border:none !important;border-radius:6px !important;font-family:'IBM Plex Mono',monospace !important;font-size:0.85rem !important;padding:0.5rem 1.5rem !important;}
+.stButton>button:hover{background:#1d4ed8 !important;}
+.stTabs [data-baseweb="tab"]{font-family:'IBM Plex Mono',monospace;font-size:0.8rem;color:#6b7280;}
+.stTabs [aria-selected="true"]{color:#2563eb !important;border-bottom-color:#2563eb !important;}
+.streamlit-expanderHeader{font-family:'IBM Plex Mono',monospace !important;font-size:0.82rem !important;color:#2563eb !important;background:#f8fafc !important;}
+.meta-row{display:flex;justify-content:space-between;padding:0.35rem 0;border-bottom:1px solid #f0f4ff;font-size:0.82rem;}
+#MainMenu{visibility:hidden;}footer{visibility:hidden;}
+[data-testid="collapsedControl"]{visibility:visible !important;display:flex !important;}
+button[kind="header"]{visibility:visible !important;}
+[data-testid="stSidebarCollapseButton"]{visibility:visible !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,10 +72,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UTILITY HELPERS
+# UTILITIES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def save_upload_to_temp(uploaded_file) -> str:
+def save_upload_to_temp(uploaded_file):
     suffix = os.path.splitext(uploaded_file.name)[-1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(uploaded_file.getbuffer())
@@ -142,14 +114,14 @@ def render_land_cover_bar(land_cover):
     parts = ""
     for key, pct in land_cover.items():
         if pct > 0:
-            parts += f'<div class="lc-{key}" style="width:{pct:.1f}%"></div>'
-    return f'<div class="lc-bar">{parts}</div>'
+            parts += '<div class="lc-' + key + '" style="width:' + str(round(pct,1)) + '%"></div>'
+    return '<div class="lc-bar">' + parts + '</div>'
 
 def render_confidence_bar(score):
     color = "#16a34a" if score >= 75 else "#d97706" if score >= 55 else "#dc2626"
-    return (f'<div class="conf-bar-container">'
-            f'<div class="conf-bar-fill" style="width:{score:.0f}%;background:{color};"></div>'
-            f'</div>')
+    return ('<div class="conf-bar-container">'
+            '<div class="conf-bar-fill" style="width:' + str(round(score)) + '%;background:' + color + ';"></div>'
+            '</div>')
 
 def parse_report_sections(report_text):
     sections = {}
@@ -162,11 +134,11 @@ def parse_report_sections(report_text):
     return sections
 
 def render_report_section(title, content, icon=""):
-    st.markdown(f"""
-    <div class="report-section">
-        <h4>{icon} {title}</h4>
-        {content.replace(chr(10), '<br>')}
-    </div>""", unsafe_allow_html=True)
+    safe_content = content.replace(chr(10), '<br>')
+    st.markdown(
+        '<div class="report-section"><h4>' + icon + ' ' + title + '</h4>' + safe_content + '</div>',
+        unsafe_allow_html=True
+    )
 
 SECTION_ICONS = {
     "Executive":"📋","Vegetation":"🌿","Temporal":"📈",
@@ -179,11 +151,11 @@ def get_icon(title):
     return "📄"
 
 def import_error_card(module, err):
-    st.markdown(f"""
-    <div class="geo-card geo-card-error">
-        <strong>Import failed:</strong> <code>{module}</code><br><br>
-        <code style="font-size:0.78rem;">{err}</code>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="geo-card geo-card-error"><strong>Import failed:</strong> <code>' +
+        module + '</code><br><br><code style="font-size:0.78rem;">' + str(err) + '</code></div>',
+        unsafe_allow_html=True
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,110 +163,109 @@ def import_error_card(module, err):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_user_guide():
+    st.markdown(
+        '<div class="geo-card geo-card-guide" style="margin-bottom:1rem;">'
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.78rem;color:#7c3aed;'
+        'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;">📖 How to read this platform — no expertise required</div>'
+        '<div style="font-size:0.84rem;color:#374151;line-height:1.7;">'
+        'This platform analyses satellite images and computes <strong>spectral indices</strong> — '
+        'numbers that reveal what the land looks like from space. Think of them as colour filters '
+        'highlighting vegetation, water, buildings, or bare soil. The AI then writes a full '
+        'environmental report explaining what those numbers mean for the environment.'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
     st.markdown("""
-    <div class="geo-card geo-card-guide" style="margin-bottom:1rem;">
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:0.78rem;color:#7c3aed;
-                    text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;">
-            📖 How to read this platform — no expertise required
-        </div>
-        <div style="font-size:0.84rem;color:#374151;line-height:1.7;">
-            This platform analyses satellite images and computes <strong>spectral indices</strong> —
-            numbers that reveal what the land looks like from space. Think of them as colour filters
-            that highlight vegetation, water, buildings, or bare soil. The AI then writes a full
-            environmental report explaining what those numbers mean.
-        </div>
+<div class="guide-grid">
+  <div class="guide-chip">
+    <strong>🌿 NDVI — Vegetation Health</strong>
+    How green and dense the plants are. High = lush forest or healthy crops.
+    Low = bare soil, desert, or urban surfaces.
+    <div class="guide-scale">
+      <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">-1</span>
+      <div class="guide-scale-block" style="background:#dc2626;"></div>
+      <div class="guide-scale-block" style="background:#f59e0b;"></div>
+      <div class="guide-scale-block" style="background:#84cc16;"></div>
+      <div class="guide-scale-block" style="background:#16a34a;"></div>
+      <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+1</span>
     </div>
-    <div class="guide-grid">
-      <div class="guide-chip">
-        <strong>🌿 NDVI — Vegetation Health</strong>
-        How green and dense the plants are. High = lush forest or healthy crops.
-        Low = bare soil, desert, or urban surfaces.
-        <div class="guide-scale">
-          <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">−1</span>
-          <div class="guide-scale-block" style="background:#dc2626;"></div>
-          <div class="guide-scale-block" style="background:#f59e0b;"></div>
-          <div class="guide-scale-block" style="background:#84cc16;"></div>
-          <div class="guide-scale-block" style="background:#16a34a;"></div>
-          <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+1</span>
-        </div>
-        <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
-          &lt;0.1 = no plants · 0.1–0.3 = sparse · &gt;0.5 = dense forest
-        </div>
-      </div>
-      <div class="guide-chip">
-        <strong>💧 NDWI — Water Detection</strong>
-        Detects open water — lakes, rivers, flooded fields.
-        Positive = water present. Negative = dry land.
-        <div class="guide-scale">
-          <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">−1</span>
-          <div class="guide-scale-block" style="background:#d97706;"></div>
-          <div class="guide-scale-block" style="background:#e5e7eb;"></div>
-          <div class="guide-scale-block" style="background:#93c5fd;"></div>
-          <div class="guide-scale-block" style="background:#1d4ed8;"></div>
-          <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+1</span>
-        </div>
-        <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
-          &gt;0.3 = open water · near 0 = moist · &lt;−0.2 = very dry
-        </div>
-      </div>
-      <div class="guide-chip">
-        <strong>🏙️ NDBI — Built-up Surfaces</strong>
-        Highlights roads, rooftops, and concrete.
-        High values = cities or industrial zones.
-        <div class="guide-scale">
-          <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">−1</span>
-          <div class="guide-scale-block" style="background:#22c55e;"></div>
-          <div class="guide-scale-block" style="background:#e5e7eb;"></div>
-          <div class="guide-scale-block" style="background:#fcd34d;"></div>
-          <div class="guide-scale-block" style="background:#f59e0b;"></div>
-          <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+1</span>
-        </div>
-        <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
-          negative = vegetation · &gt;0.1 = urban/industrial
-        </div>
-      </div>
-      <div class="guide-chip">
-        <strong>📈 ΔNDVI — Vegetation Change</strong>
-        Compares vegetation between two dates. Positive = more green over time.
-        Negative = forest loss or land degradation.
-        <div class="guide-scale">
-          <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">−</span>
-          <div class="guide-scale-block" style="background:#dc2626;"></div>
-          <div class="guide-scale-block" style="background:#fca5a5;"></div>
-          <div class="guide-scale-block" style="background:#bbf7d0;"></div>
-          <div class="guide-scale-block" style="background:#16a34a;"></div>
-          <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+</span>
-        </div>
-        <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
-          red = vegetation loss · green = vegetation gain
-        </div>
-      </div>
-      <div class="guide-chip">
-        <strong>🏜️ Aridity Index</strong>
-        How dry the climate is over many years — rainfall vs evaporation.
-        Low = desert. High = humid forest.
-        <div style="font-size:0.68rem;color:#6b7280;margin-top:6px;">
-          &lt;0.05 hyper-arid · 0.05–0.2 arid · 0.2–0.5 semi-arid · &gt;0.65 humid
-        </div>
-      </div>
-      <div class="guide-chip">
-        <strong>🗺️ Land Cover Classes</strong>
-        Every pixel is sorted into <em>Water</em>, <em>Vegetation</em>,
-        <em>Urban</em>, or <em>Barren</em> land, then shown as a percentage
-        of the entire scene.
-      </div>
-      <div class="guide-chip">
-        <strong>⚖️ Confidence Score</strong>
-        How much data was available. Above 75% = findings well-supported.
-        Below 55% = some data was missing, interpret with caution.
-      </div>
-      <div class="guide-chip">
-        <strong>🛰️ Data sources</strong>
-        Images: Google Earth Engine (Sentinel-2 / Landsat).
-        Climate: NASA POWER. Report: AI large language model (Groq).
-      </div>
+    <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
+      &lt;0.1 = no plants &middot; 0.1&ndash;0.3 = sparse &middot; &gt;0.5 = dense forest
     </div>
-    """, unsafe_allow_html=True)
+  </div>
+  <div class="guide-chip">
+    <strong>💧 NDWI — Water Detection</strong>
+    Detects open water: lakes, rivers, flooded fields.
+    Positive values = water present. Negative = dry land.
+    <div class="guide-scale">
+      <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">-1</span>
+      <div class="guide-scale-block" style="background:#d97706;"></div>
+      <div class="guide-scale-block" style="background:#e5e7eb;"></div>
+      <div class="guide-scale-block" style="background:#93c5fd;"></div>
+      <div class="guide-scale-block" style="background:#1d4ed8;"></div>
+      <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+1</span>
+    </div>
+    <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
+      &gt;0.3 = open water &middot; near 0 = moist soil &middot; &lt;-0.2 = very dry
+    </div>
+  </div>
+  <div class="guide-chip">
+    <strong>🏙️ NDBI — Built-up Surfaces</strong>
+    Highlights roads, rooftops, and concrete.
+    High values = cities or industrial zones.
+    <div class="guide-scale">
+      <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">-1</span>
+      <div class="guide-scale-block" style="background:#22c55e;"></div>
+      <div class="guide-scale-block" style="background:#e5e7eb;"></div>
+      <div class="guide-scale-block" style="background:#fcd34d;"></div>
+      <div class="guide-scale-block" style="background:#f59e0b;"></div>
+      <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+1</span>
+    </div>
+    <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
+      negative = vegetation &middot; &gt;0.1 = urban/industrial
+    </div>
+  </div>
+  <div class="guide-chip">
+    <strong>📈 ΔNDVI — Vegetation Change</strong>
+    Compares vegetation between two dates. Positive = more green over time.
+    Negative = forest loss or land degradation.
+    <div class="guide-scale">
+      <span style="flex:0 0 auto;color:#6b7280;margin-right:4px;">-</span>
+      <div class="guide-scale-block" style="background:#dc2626;"></div>
+      <div class="guide-scale-block" style="background:#fca5a5;"></div>
+      <div class="guide-scale-block" style="background:#bbf7d0;"></div>
+      <div class="guide-scale-block" style="background:#16a34a;"></div>
+      <span style="flex:0 0 auto;color:#6b7280;margin-left:4px;">+</span>
+    </div>
+    <div style="font-size:0.68rem;color:#6b7280;margin-top:3px;">
+      red = vegetation loss &middot; green = vegetation gain
+    </div>
+  </div>
+  <div class="guide-chip">
+    <strong>🏜️ Aridity Index</strong>
+    How dry the climate is over many years — rainfall vs evaporation.
+    Low = desert. High = humid forest.
+    <div style="font-size:0.68rem;color:#6b7280;margin-top:6px;">
+      &lt;0.05 hyper-arid &middot; 0.05-0.2 arid &middot; 0.2-0.5 semi-arid &middot; &gt;0.65 humid
+    </div>
+  </div>
+  <div class="guide-chip">
+    <strong>🗺️ Land Cover Classes</strong>
+    Every pixel is sorted into <em>Water</em>, <em>Vegetation</em>,
+    <em>Urban</em>, or <em>Barren</em> land, shown as a percentage of the scene.
+  </div>
+  <div class="guide-chip">
+    <strong>⚖️ Confidence Score</strong>
+    How much data was available. Above 75% = findings well-supported.
+    Below 55% = some data missing, interpret with caution.
+  </div>
+  <div class="guide-chip">
+    <strong>🛰️ Data sources</strong>
+    Images: Google Earth Engine (Sentinel-2 / Landsat).
+    Climate: NASA POWER. AI report: Groq LLM.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -303,12 +274,7 @@ def render_user_guide():
 
 def generate_pdf_report(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
                         land_cover, delta, ndvi_t1_val, ndvi_t2_val,
-                        t1_label, t2_label, delta_map, ts_df, ts_trend) -> bytes:
-    """
-    Build a comprehensive PDF using reportlab and return the raw bytes.
-    Includes: metadata, indices, land cover, index map images,
-    temporal comparison, NDVI time series, and the full AI report.
-    """
+                        t1_label, t2_label, delta_map, ts_df, ts_trend):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.lib.units import cm
@@ -327,87 +293,85 @@ def generate_pdf_report(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         title="Geospatial Intelligence Report",
     )
 
-    # ── Styles ────────────────────────────────────────────────
     base   = getSampleStyleSheet()
     normal = base["Normal"]
-
-    def S(name, **kw):
-        s = ParagraphStyle(name, parent=normal, **kw)
-        return s
-
-    sTitle   = S("T", fontSize=20, fontName="Helvetica-Bold",
-                 textColor=colors.HexColor("#1a1f2e"), spaceAfter=6, alignment=TA_CENTER)
-    sSub     = S("Sub", fontSize=10, textColor=colors.HexColor("#6b7280"),
-                 spaceAfter=16, alignment=TA_CENTER)
-    sH1      = S("H1", fontSize=13, fontName="Helvetica-Bold",
-                 textColor=colors.HexColor("#2563eb"), spaceBefore=14, spaceAfter=4)
-    sH2      = S("H2", fontSize=10, fontName="Helvetica-Bold",
-                 textColor=colors.HexColor("#374151"), spaceBefore=8, spaceAfter=3)
-    sBody    = S("B", fontSize=9, leading=14, spaceAfter=6, alignment=TA_JUSTIFY)
-    sCaption = S("C", fontSize=7.5, textColor=colors.HexColor("#6b7280"),
-                 spaceAfter=4, alignment=TA_CENTER)
-    sMono    = S("M", fontSize=8, fontName="Courier",
-                 textColor=colors.HexColor("#374151"), spaceAfter=4)
-    sGuide   = S("G", fontSize=8, leading=12, spaceAfter=3,
-                 textColor=colors.HexColor("#374151"))
 
     BLUE  = colors.HexColor("#2563eb")
     GRAY  = colors.HexColor("#dde3ed")
     GREEN = colors.HexColor("#16a34a")
     RED   = colors.HexColor("#dc2626")
 
+    def S(name, **kw):
+        return ParagraphStyle(name, parent=normal, **kw)
+
+    sTitle   = S("T",  fontSize=20, fontName="Helvetica-Bold",
+                 textColor=colors.HexColor("#1a1f2e"), spaceAfter=6, alignment=TA_CENTER)
+    sSub     = S("Su", fontSize=10, textColor=colors.HexColor("#6b7280"),
+                 spaceAfter=16, alignment=TA_CENTER)
+    sH1      = S("H1", fontSize=13, fontName="Helvetica-Bold",
+                 textColor=BLUE, spaceBefore=14, spaceAfter=4)
+    sH2      = S("H2", fontSize=10, fontName="Helvetica-Bold",
+                 textColor=colors.HexColor("#374151"), spaceBefore=8, spaceAfter=3)
+    sBody    = S("Bo", fontSize=9, leading=14, spaceAfter=6, alignment=TA_JUSTIFY)
+    sCaption = S("Ca", fontSize=7.5, textColor=colors.HexColor("#6b7280"),
+                 spaceAfter=4, alignment=TA_CENTER)
+    sMono    = S("Mo", fontSize=8, fontName="Courier",
+                 textColor=colors.HexColor("#374151"), spaceAfter=4)
+    sGuide   = S("Gu", fontSize=8, leading=12, spaceAfter=3,
+                 textColor=colors.HexColor("#374151"))
+
     story = []
 
-    # ── Cover ─────────────────────────────────────────────────
+    # Cover
     story.append(Spacer(1, 1.5*cm))
-    story.append(Paragraph("🛰️ Geospatial Intelligence Report", sTitle))
-    region  = getattr(ic, "region",    None) or "Unknown region"
-    ecosys  = getattr(ic, "ecosystem", None) or "—"
-    t_cover = f"{t1_label} → {t2_label}" if t1_label and t2_label else "Single image"
-    story.append(Paragraph(f"{region}  ·  {ecosys}  ·  {t_cover}", sSub))
+    story.append(Paragraph("Geospatial Intelligence Report", sTitle))
+    region = getattr(ic, "region", None) or "Unknown region"
+    ecosys = getattr(ic, "ecosystem", None) or "Unknown"
+    t_cov  = (str(t1_label) + " to " + str(t2_label)) if t1_label and t2_label else "Single image"
+    story.append(Paragraph(region + "  |  " + ecosys + "  |  " + t_cov, sSub))
     story.append(HRFlowable(width="100%", thickness=1, color=BLUE, spaceAfter=16))
 
-    # ── Plain-language guide ──────────────────────────────────
+    # Plain-language guide
     story.append(Paragraph("What do these numbers mean?", sH1))
-    guide_rows = [
-        ("NDVI — Vegetation Health",
-         "Measures how green and dense the plants are. Values range from -1 to +1. "
-         "Below 0.1 = bare soil or water. 0.1–0.3 = sparse vegetation. Above 0.5 = dense forest."),
-        ("NDWI — Water Detection",
-         "Detects open water (lakes, rivers, flooded fields). Positive values = water present. "
-         "Negative = dry land. Above 0.3 confirms a real water body."),
-        ("NDBI — Built-up Surfaces",
-         "Highlights roads, rooftops and concrete. Negative = vegetation dominates. "
-         "Above 0.1 = significant urban or industrial cover."),
-        ("ΔNDVI — Vegetation Change",
-         "Compares vegetation between two dates. Positive = more greenery over time. "
+    guide_items = [
+        ("NDVI - Vegetation Health",
+         "Measures how green and dense the plants are. Values from -1 to +1. "
+         "Below 0.1 = bare soil. 0.1-0.3 = sparse vegetation. Above 0.5 = dense forest."),
+        ("NDWI - Water Detection",
+         "Detects open water (lakes, rivers, flooded fields). "
+         "Positive = water present. Negative = dry land. Above 0.3 = real water body."),
+        ("NDBI - Built-up Surfaces",
+         "Highlights roads, rooftops and concrete. "
+         "Negative = vegetation dominates. Above 0.1 = significant urban cover."),
+        ("NDVI Change (delta NDVI)",
+         "Compares vegetation between two dates. Positive = more greenery. "
          "Negative = land degradation or deforestation."),
         ("Aridity Index",
-         "How dry the climate is over many years. Below 0.2 = arid/desert. "
-         "Above 0.65 = humid enough for dense forests without irrigation."),
+         "How dry the climate is over many years. "
+         "Below 0.2 = arid/desert. Above 0.65 = humid enough for dense forests."),
         ("Confidence Score",
-         "How much data was available. Above 75% = findings well-supported. "
-         "Below 55% = some data was missing; interpret with caution."),
+         "How much data was available. Above 75% = well-supported. "
+         "Below 55% = some data missing, interpret with caution."),
     ]
-    for gname, gdesc in guide_rows:
-        story.append(Paragraph(f"<b>{gname}</b>: {gdesc}", sGuide))
+    for gname, gdesc in guide_items:
+        story.append(Paragraph("<b>" + gname + ":</b> " + gdesc, sGuide))
     story.append(Spacer(1, 0.3*cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY, spaceAfter=10))
 
-    # ── Spectral indices table ────────────────────────────────
-    story.append(Paragraph("Spectral Indices & Metadata", sH1))
+    # Spectral indices table
+    story.append(Paragraph("Spectral Indices and Metadata", sH1))
 
-    conf  = getattr(ic, "confidence_score", 0) or 0
-    ndvi  = getattr(ic, "ndvi_mean", None)
-    ndwi  = getattr(ic, "ndwi_mean", None)
-    ndbi  = getattr(ic, "ndbi_mean", None)
-    ai_v  = getattr(ic, "aridity_index", None)
-    meta  = ic.image_meta
+    conf   = getattr(ic, "confidence_score", 0) or 0
+    ndvi_v = getattr(ic, "ndvi_mean", None)
+    ndwi_v = getattr(ic, "ndwi_mean", None)
+    ndbi_v = getattr(ic, "ndbi_mean", None)
+    ai_v   = getattr(ic, "aridity_index", None)
+    meta   = ic.image_meta
 
-    idx_data = [["Metric", "Value", "Interpretation"]]
-    def fv(v): return f"{v:.3f}" if v is not None else "N/A"
+    def fv(v): return "{:.3f}".format(v) if v is not None else "N/A"
+
     def interp_ndvi(v):
-        if v is None: return "—"
+        if v is None: return "N/A"
         if v < 0.05:  return "Bare soil / water"
         if v < 0.12:  return "Very sparse vegetation"
         if v < 0.20:  return "Sparse vegetation"
@@ -416,211 +380,199 @@ def generate_pdf_report(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         if v < 0.60:  return "Moderately high vegetation"
         if v < 0.75:  return "High vegetation"
         return "Dense forest"
+
     def interp_ndwi(v):
-        if v is None:   return "—"
+        if v is None:   return "N/A"
         if v > 0.30:    return "Permanent open water"
         if v > 0.10:    return "Shallow water / wetland"
         if v > 0.00:    return "Moist soil"
         if v > -0.15:   return "Dry surface"
         return "Very dry / salt crust"
+
     def interp_ndbi(v):
-        if v is None:  return "—"
+        if v is None:  return "N/A"
         if v > 0.20:   return "Dense urban"
         if v > 0.05:   return "Peri-urban / construction"
         if v > 0.00:   return "Sparse built-up"
-        return "Vegetated / water"
+        return "Vegetated / water dominated"
+
     def interp_ai(v):
-        if v is None:  return "—"
+        if v is None:  return "N/A"
         if v < 0.05:   return "Hyper-arid"
         if v < 0.20:   return "Arid"
         if v < 0.50:   return "Semi-arid"
         if v < 0.65:   return "Dry sub-humid"
         return "Humid"
 
-    idx_data += [
-        ["NDVI",           fv(ndvi),  interp_ndvi(ndvi)],
-        ["NDWI",           fv(ndwi),  interp_ndwi(ndwi)],
-        ["NDBI",           fv(ndbi),  interp_ndbi(ndbi)],
-        ["Aridity Index",  fv(ai_v),  interp_ai(ai_v)],
-        ["Confidence",     f"{conf:.0f}%", "High" if conf>=75 else "Moderate" if conf>=55 else "Low"],
-    ]
+    idx_data = [["Metric", "Value", "Interpretation"]]
+    idx_data.append(["NDVI",          fv(ndvi_v),  interp_ndvi(ndvi_v)])
+    idx_data.append(["NDWI",          fv(ndwi_v),  interp_ndwi(ndwi_v)])
+    idx_data.append(["NDBI",          fv(ndbi_v),  interp_ndbi(ndbi_v)])
+    idx_data.append(["Aridity Index",  fv(ai_v),   interp_ai(ai_v)])
+    conf_label = "High" if conf >= 75 else "Moderate" if conf >= 55 else "Low"
+    idx_data.append(["Confidence",    "{:.0f}%".format(conf), conf_label])
     if delta is not None:
         sign = "+" if delta >= 0 else ""
-        idx_data.append(["ΔNDVI", f"{sign}{delta:.3f}",
-                         "Vegetation gain" if delta > 0 else "Vegetation loss"])
+        trend_lbl = "Vegetation gain" if delta > 0 else "Vegetation loss"
+        idx_data.append(["Delta NDVI", sign + "{:.3f}".format(delta), trend_lbl])
 
     idx_table = Table(idx_data, colWidths=[3.5*cm, 2.5*cm, 9.5*cm])
     idx_table.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (-1,0),  BLUE),
-        ("TEXTCOLOR",    (0,0), (-1,0),  colors.white),
-        ("FONTNAME",     (0,0), (-1,0),  "Helvetica-Bold"),
-        ("FONTSIZE",     (0,0), (-1,-1), 8),
+        ("BACKGROUND",    (0,0),(-1,0),  BLUE),
+        ("TEXTCOLOR",     (0,0),(-1,0),  colors.white),
+        ("FONTNAME",      (0,0),(-1,0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0),(-1,-1), 8),
         ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, colors.HexColor("#f8fafc")]),
-        ("GRID",         (0,0), (-1,-1), 0.4, GRAY),
-        ("LEFTPADDING",  (0,0), (-1,-1), 6),
-        ("RIGHTPADDING", (0,0), (-1,-1), 6),
-        ("TOPPADDING",   (0,0), (-1,-1), 4),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 4),
-        ("VALIGN",       (0,0), (-1,-1), "MIDDLE"),
+        ("GRID",          (0,0),(-1,-1), 0.4, GRAY),
+        ("LEFTPADDING",   (0,0),(-1,-1), 6),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 6),
+        ("TOPPADDING",    (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
     ]))
     story.append(idx_table)
     story.append(Spacer(1, 0.4*cm))
 
-    # ── Land cover ────────────────────────────────────────────
     if land_cover:
         story.append(Paragraph("Land Cover Breakdown", sH2))
-        lc_data = [["Class", "Coverage (%)"]]
-        lc_colors_map = {"water": "#3b82f6","vegetation":"#22c55e",
-                         "urban":"#f59e0b","barren":"#94a3b8"}
+        lc_data = [["Class", "Coverage"]]
         for cls, pct in land_cover.items():
-            lc_data.append([cls.capitalize(), f"{pct:.1f}%"])
+            lc_data.append([cls.capitalize(), "{:.1f}%".format(pct)])
         lc_table = Table(lc_data, colWidths=[5*cm, 4*cm])
         lc_table.setStyle(TableStyle([
-            ("BACKGROUND",  (0,0),(-1,0), colors.HexColor("#f0f4ff")),
-            ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
-            ("FONTSIZE",    (0,0),(-1,-1),8),
-            ("GRID",        (0,0),(-1,-1),0.4, GRAY),
-            ("LEFTPADDING", (0,0),(-1,-1),6),
-            ("TOPPADDING",  (0,0),(-1,-1),3),
+            ("BACKGROUND",   (0,0),(-1,0), colors.HexColor("#f0f4ff")),
+            ("FONTNAME",     (0,0),(-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",     (0,0),(-1,-1),8),
+            ("GRID",         (0,0),(-1,-1),0.4, GRAY),
+            ("LEFTPADDING",  (0,0),(-1,-1),6),
+            ("TOPPADDING",   (0,0),(-1,-1),3),
             ("BOTTOMPADDING",(0,0),(-1,-1),3),
         ]))
         story.append(lc_table)
         story.append(Spacer(1, 0.3*cm))
 
-    # ── Image metadata ────────────────────────────────────────
     story.append(Paragraph("Image Metadata", sH2))
-    meta_lines = [
-        f"Format: {getattr(ic,'image_format','—')}",
-        f"Bands: {getattr(ic,'n_bands','—')}",
-        f"Dimensions: {meta.get('width','?')} x {meta.get('height','?')} px",
-        f"CRS: {meta.get('crs','—')}",
-        f"Sensor: {meta.get('sensor','—')}",
+    meta_parts = [
+        "Format: " + str(getattr(ic, "image_format", "N/A")),
+        "Bands: " + str(getattr(ic, "n_bands", "N/A")),
+        "Dimensions: " + str(meta.get("width","?")) + " x " + str(meta.get("height","?")) + " px",
+        "CRS: " + str(meta.get("crs","N/A")),
+        "Sensor: " + str(meta.get("sensor","N/A")),
     ]
-    story.append(Paragraph("  |  ".join(meta_lines), sMono))
+    story.append(Paragraph("  |  ".join(meta_parts), sMono))
 
-    # Climate
     cs = getattr(ic, "climate_summary", None)
     if cs:
         story.append(Paragraph("Climate Snapshot", sH2))
-        clim_lines = [
-            f"Rainfall (latest): {cs.get('rainfall_mm_latest',0):.1f} mm",
-            f"Trend: {cs.get('rainfall_mm_trend','—')}",
-            f"Temperature: {cs.get('temperature_c_latest',0):.1f} °C",
-            f"Humidity: {cs.get('humidity_pct_latest',0):.1f}%",
+        clim_parts = [
+            "Rainfall (latest): " + "{:.1f}".format(cs.get("rainfall_mm_latest",0)) + " mm",
+            "Trend: " + str(cs.get("rainfall_mm_trend","N/A")),
+            "Temperature: " + "{:.1f}".format(cs.get("temperature_c_latest",0)) + " C",
+            "Humidity: " + "{:.1f}".format(cs.get("humidity_pct_latest",0)) + "%",
         ]
-        story.append(Paragraph("  |  ".join(clim_lines), sMono))
+        story.append(Paragraph("  |  ".join(clim_parts), sMono))
 
     story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY, spaceAfter=10))
 
-    # ── Index map figures ─────────────────────────────────────
-    maps_to_render = [
-        (ndvi_map, "NDVI — Vegetation Density", "RdYlGn"),
-        (ndwi_map, "NDWI — Water Content",      "Blues_r"),
-        (ndbi_map, "NDBI — Built-up Index",     "YlOrRd"),
-    ]
-    maps_to_render = [(a,t,c) for a,t,c in maps_to_render if a is not None]
+    maps_to_render = []
+    if ndvi_map is not None: maps_to_render.append((ndvi_map, "NDVI - Vegetation Density", "RdYlGn"))
+    if ndwi_map is not None: maps_to_render.append((ndwi_map, "NDWI - Water Content",      "Blues_r"))
+    if ndbi_map is not None: maps_to_render.append((ndbi_map, "NDBI - Built-up Index",     "YlOrRd"))
 
     if maps_to_render:
         story.append(Paragraph("Spectral Index Maps", sH1))
-        # Render side-by-side if >=2 maps, else single
-        img_width = (A4[0] - 4*cm) / max(len(maps_to_render), 1) - 0.3*cm
-        img_height = img_width * 0.72
-
+        n = len(maps_to_render)
+        img_w = (A4[0] - 4*cm) / n - 0.3*cm
+        img_h = img_w * 0.72
         row_imgs = []
         for arr, title, cmap in maps_to_render:
             fig, ax = plt.subplots(figsize=(4, 2.9), facecolor="#ffffff")
             ax.set_facecolor("#f8fafc")
-            im = ax.imshow(arr, cmap=cmap, vmin=-1, vmax=1, aspect="auto")
-            fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02).ax.tick_params(labelsize=6)
+            im2 = ax.imshow(arr, cmap=cmap, vmin=-1, vmax=1, aspect="auto")
+            fig.colorbar(im2, ax=ax, fraction=0.03, pad=0.02).ax.tick_params(labelsize=6)
             ax.set_title(title, fontsize=7, fontfamily="monospace", pad=4)
             ax.axis("off"); fig.tight_layout(pad=0.4)
-            img_buf = io.BytesIO()
-            fig.savefig(img_buf, format="PNG", dpi=110, bbox_inches="tight")
-            plt.close(fig)
-            img_buf.seek(0)
-            row_imgs.append(RLImage(img_buf, width=img_width, height=img_height))
-
-        # Put maps in a single-row table
-        map_table = Table([row_imgs], colWidths=[img_width]*len(row_imgs))
+            ibuf = io.BytesIO()
+            fig.savefig(ibuf, format="PNG", dpi=110, bbox_inches="tight")
+            plt.close(fig); ibuf.seek(0)
+            row_imgs.append(RLImage(ibuf, width=img_w, height=img_h))
+        map_table = Table([row_imgs], colWidths=[img_w]*n)
         map_table.setStyle(TableStyle([
-            ("VALIGN",  (0,0),(-1,-1),"MIDDLE"),
-            ("ALIGN",   (0,0),(-1,-1),"CENTER"),
-            ("LEFTPADDING", (0,0),(-1,-1),2),
-            ("RIGHTPADDING",(0,0),(-1,-1),2),
+            ("VALIGN",       (0,0),(-1,-1),"MIDDLE"),
+            ("ALIGN",        (0,0),(-1,-1),"CENTER"),
+            ("LEFTPADDING",  (0,0),(-1,-1),2),
+            ("RIGHTPADDING", (0,0),(-1,-1),2),
         ]))
         story.append(map_table)
         story.append(Spacer(1, 0.3*cm))
 
-    # ── Temporal NDVI ─────────────────────────────────────────
     if delta is not None and ndvi_t1_val is not None and ndvi_t2_val is not None:
         story.append(Paragraph("Temporal NDVI Comparison", sH1))
-        sign  = "+" if delta >= 0 else ""
-        trend = "Vegetation gain" if delta > 0 else "Vegetation loss"
-        color = GREEN if delta >= 0 else RED
+        sign2  = "+" if delta >= 0 else ""
+        tlabel = "Vegetation gain" if delta > 0 else "Vegetation loss"
+        tcol   = GREEN if delta >= 0 else RED
         t_data = [
-            [t1_label or "Image 1", "→", t2_label or "Image 2", "Change (ΔNDVI)"],
-            [f"{ndvi_t1_val:.3f}", "", f"{ndvi_t2_val:.3f}", f"{sign}{delta:.3f} ({trend})"],
+            [str(t1_label or "Image 1"), "to", str(t2_label or "Image 2"), "Change (Delta NDVI)"],
+            ["{:.3f}".format(ndvi_t1_val), "", "{:.3f}".format(ndvi_t2_val),
+             sign2 + "{:.3f}".format(delta) + " (" + tlabel + ")"],
         ]
         t_table = Table(t_data, colWidths=[4*cm,1*cm,4*cm,6.5*cm])
         t_table.setStyle(TableStyle([
-            ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
-            ("FONTSIZE",    (0,0),(-1,-1),9),
-            ("ALIGN",       (0,0),(-1,-1),"CENTER"),
-            ("TEXTCOLOR",   (3,1),(3,1),  color),
-            ("FONTNAME",    (3,1),(3,1),  "Helvetica-Bold"),
-            ("GRID",        (0,0),(-1,-1),0.4, GRAY),
-            ("TOPPADDING",  (0,0),(-1,-1),5),
+            ("FONTNAME",     (0,0),(-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",     (0,0),(-1,-1),9),
+            ("ALIGN",        (0,0),(-1,-1),"CENTER"),
+            ("TEXTCOLOR",    (3,1),(3,1),  tcol),
+            ("FONTNAME",     (3,1),(3,1),  "Helvetica-Bold"),
+            ("GRID",         (0,0),(-1,-1),0.4, GRAY),
+            ("TOPPADDING",   (0,0),(-1,-1),5),
             ("BOTTOMPADDING",(0,0),(-1,-1),5),
         ]))
         story.append(t_table)
         story.append(Spacer(1, 0.3*cm))
 
-    # ΔNDVI spatial map
     if delta_map is not None:
-        story.append(Paragraph("ΔNDVI Spatial Change Map", sH2))
-        fig, ax = plt.subplots(figsize=(6, 3.5), facecolor="#ffffff")
-        ax.set_facecolor("#f8fafc")
-        im = ax.imshow(delta_map, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
-        fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02).ax.tick_params(labelsize=6)
-        ax.set_title("ΔNDVI Change Map — Green=gain · Red=loss",
-                     fontsize=8, fontfamily="monospace", pad=4)
-        ax.axis("off"); fig.tight_layout(pad=0.4)
+        story.append(Paragraph("Delta NDVI Spatial Change Map", sH2))
+        fig2, ax2 = plt.subplots(figsize=(6, 3.5), facecolor="#ffffff")
+        ax2.set_facecolor("#f8fafc")
+        im3 = ax2.imshow(delta_map, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
+        fig2.colorbar(im3, ax=ax2, fraction=0.03, pad=0.02).ax.tick_params(labelsize=6)
+        ax2.set_title("Delta NDVI Change Map  |  Green=gain  Red=loss",
+                      fontsize=8, fontfamily="monospace", pad=4)
+        ax2.axis("off"); fig2.tight_layout(pad=0.4)
         dm_buf = io.BytesIO()
-        fig.savefig(dm_buf, format="PNG", dpi=110, bbox_inches="tight")
-        plt.close(fig)
-        dm_buf.seek(0)
-        dmap_w = A4[0] - 4*cm
-        story.append(RLImage(dm_buf, width=dmap_w, height=dmap_w*0.55))
+        fig2.savefig(dm_buf, format="PNG", dpi=110, bbox_inches="tight")
+        plt.close(fig2); dm_buf.seek(0)
+        dw = A4[0] - 4*cm
+        story.append(RLImage(dm_buf, width=dw, height=dw*0.55))
         story.append(Spacer(1, 0.3*cm))
 
-    # NDVI time series
     if ts_df is not None and len(ts_df) > 1:
         story.append(Paragraph("NDVI Time Series (Annual)", sH1))
         try:
             from time_series import render_time_series_chart
-            ecosys_str = getattr(ic, "ecosystem", "") or ""
-            fig_ts = render_time_series_chart(ts_df, ts_trend or {}, ecosystem=ecosys_str)
+            fig_ts = render_time_series_chart(
+                ts_df, ts_trend or {},
+                ecosystem=getattr(ic,"ecosystem","") or ""
+            )
             ts_buf = io.BytesIO()
             fig_ts.savefig(ts_buf, format="PNG", dpi=110, bbox_inches="tight")
-            plt.close(fig_ts)
-            ts_buf.seek(0)
-            ts_w = A4[0] - 4*cm
-            story.append(RLImage(ts_buf, width=ts_w, height=ts_w*0.4))
+            plt.close(fig_ts); ts_buf.seek(0)
+            tw = A4[0] - 4*cm
+            story.append(RLImage(ts_buf, width=tw, height=tw*0.4))
             if ts_trend:
                 tc = ts_trend
                 story.append(Paragraph(
-                    f"Trend: {tc.get('trend','—')}  |  "
-                    f"Rate: {tc.get('annual_rate',0):+.4f}/yr  |  "
-                    f"Total change: {tc.get('total_change',0):+.3f}  |  "
-                    f"R²: {tc.get('r2',0):.2f}",
-                    sMono,
+                    "Trend: " + str(tc.get("trend","N/A")) + "  |  " +
+                    "Rate: " + "{:+.4f}".format(tc.get("annual_rate",0)) + "/yr  |  " +
+                    "Total change: " + "{:+.3f}".format(tc.get("total_change",0)) + "  |  " +
+                    "R2: " + "{:.2f}".format(tc.get("r2",0)),
+                    sMono
                 ))
         except Exception as e:
-            story.append(Paragraph(f"Time series chart error: {e}", sBody))
+            story.append(Paragraph("Time series chart error: " + str(e), sBody))
 
     story.append(PageBreak())
 
-    # ── AI-generated scientific report ────────────────────────
     story.append(Paragraph("AI-Generated Scientific Report", sH1))
     story.append(HRFlowable(width="100%", thickness=1, color=BLUE, spaceAfter=8))
 
@@ -628,37 +580,35 @@ def generate_pdf_report(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
         first = report_text.find("## 1.")
         if first == -1: first = report_text.find("## ")
         body = report_text[first:] if first != -1 else report_text
-        footer_m = re.search(r'\n={10,}\s*\nConfidence:', body)
-        if footer_m: body = body[:footer_m.start()].strip()
-        else: body = re.sub(r'\n={10,}.*$', '', body, flags=re.DOTALL).strip()
+        fm = re.search(r'\n={10,}\s*\nConfidence:', body)
+        if fm: body = body[:fm.start()].strip()
+        else:  body = re.sub(r'\n={10,}.*$', '', body, flags=re.DOTALL).strip()
 
         sections = parse_report_sections(body)
         for title, content in sections.items():
             icon = get_icon(title)
             story.append(KeepTogether([
-                Paragraph(f"{icon} {title}", sH1),
+                Paragraph(icon + " " + title, sH1),
                 HRFlowable(width="100%", thickness=0.4, color=GRAY, spaceAfter=4),
             ]))
-            # Clean markdown bullets and bold
             clean = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', content)
             for line in clean.split("\n"):
                 line = line.strip()
                 if not line: continue
                 if line.startswith("* ") or line.startswith("- "):
-                    story.append(Paragraph(f"• {line[2:]}", sBody))
+                    story.append(Paragraph("- " + line[2:], sBody))
                 else:
                     story.append(Paragraph(line, sBody))
             story.append(Spacer(1, 0.2*cm))
     else:
         story.append(Paragraph("Report not generated.", sBody))
 
-    # ── Footer note ───────────────────────────────────────────
     story.append(Spacer(1, 0.5*cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY, spaceAfter=4))
     story.append(Paragraph(
-        f"Generated by Geospatial Intelligence Platform · "
-        f"Region: {region} · Confidence: {conf:.0f}%",
-        sCaption,
+        "Generated by Geospatial Intelligence Platform  |  " +
+        "Region: " + region + "  |  Confidence: " + "{:.0f}".format(conf) + "%",
+        sCaption
     ))
 
     doc.build(story)
@@ -671,16 +621,16 @@ def generate_pdf_report(ic, report_text, ndvi_map, ndwi_map, ndbi_map,
 # ══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.markdown("""
-    <div style="padding:0.5rem 0 1.2rem 0;">
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:1.05rem;
-                    color:#2563eb;font-weight:600;">🛰️ GeoIntel</div>
-        <div style="font-size:0.70rem;color:#6b7280;margin-top:0.2rem;
-                    letter-spacing:0.05em;">MULTIMODAL GEOSPATIAL PLATFORM</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div style="padding:0.5rem 0 1.2rem 0;">'
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.05rem;color:#2563eb;font-weight:600;">🛰️ GeoIntel</div>'
+        '<div style="font-size:0.70rem;color:#6b7280;margin-top:0.2rem;letter-spacing:0.05em;">MULTIMODAL GEOSPATIAL PLATFORM</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     st.markdown("### 📡 Image Input")
-    input_mode = st.radio("Source", ["Upload image(s)","Fetch from GEE"], horizontal=True)
+    input_mode = st.radio("Source", ["Upload image(s)", "Fetch from GEE"], horizontal=True)
 
     uploaded_t1 = uploaded_t2 = gee_params = None
 
@@ -712,7 +662,7 @@ with st.sidebar:
         gee_params = {
             "lat": gee_lat, "lon": gee_lon,
             "year1": int(gee_year1), "year2": int(gee_year2),
-            "sensor": None if gee_sensor=="Auto" else gee_sensor,
+            "sensor": None if gee_sensor == "Auto" else gee_sensor,
             "buffer_km": gee_buffer,
         }
         date_t1 = _date(int(gee_year1), 4, 1)
@@ -720,7 +670,7 @@ with st.sidebar:
 
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
     st.markdown("### 📊 Climate Data")
-    climate_mode = st.radio("Source", ["Auto-fetch (NASA POWER)","Upload CSV"], horizontal=True)
+    climate_mode = st.radio("Source", ["Auto-fetch (NASA POWER)", "Upload CSV"], horizontal=True)
     uploaded_csv = None
     if climate_mode == "Upload CSV":
         uploaded_csv = st.file_uploader("NASA POWER CSV", type=["csv"], key="csv")
@@ -737,47 +687,48 @@ with st.sidebar:
     run_btn = st.button("▶ Run Analysis", use_container_width=True)
 
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style="font-size:0.68rem;color:#9ca3af;line-height:1.7;">
-        Pipeline: Image → ViT → RAG → LLM<br>
-        LLM: Groq / llama-3.3-70b-versatile<br>
-        Indices: NDVI · NDWI · NDBI · BSI · UI · MNDWI
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:0.68rem;color:#9ca3af;line-height:1.7;">'
+        'Pipeline: Image → ViT → RAG → LLM<br>'
+        'LLM: Groq / llama-3.3-70b-versatile<br>'
+        'Indices: NDVI · NDWI · NDBI · BSI · UI · MNDWI'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.markdown("""
-<div style="margin-bottom:1.2rem;">
-    <h1 style="margin:0;">Geospatial Intelligence Platform</h1>
-    <div class="label-mono" style="margin-top:0.3rem;">
-        Satellite imagery · Spectral analysis · AI-generated environmental reports
-    </div>
-</div>""", unsafe_allow_html=True)
+st.markdown(
+    '<div style="margin-bottom:1.2rem;">'
+    '<h1 style="margin:0;">Geospatial Intelligence Platform</h1>'
+    '<div class="label-mono" style="margin-top:0.3rem;">'
+    'Satellite imagery · Spectral analysis · AI-generated environmental reports'
+    '</div></div>',
+    unsafe_allow_html=True
+)
 
 if not run_btn:
     render_user_guide()
-    st.markdown("""
-    <div class="geo-card" style="text-align:center;padding:2.5rem 2rem;
-                border-style:dashed;margin-top:0.5rem;">
-        <div style="font-size:2.5rem;margin-bottom:1rem;">🛰️</div>
-        <div style="font-family:'IBM Plex Mono',monospace;color:#2563eb;
-                    font-size:1rem;margin-bottom:0.5rem;">Ready for Analysis</div>
-        <div style="color:#6b7280;font-size:0.85rem;max-width:420px;margin:0 auto;">
-            Configure your image source in the sidebar, then click
-            <strong>Run Analysis</strong>.
-        </div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="geo-card" style="text-align:center;padding:2.5rem 2rem;border-style:dashed;margin-top:0.5rem;">'
+        '<div style="font-size:2.5rem;margin-bottom:1rem;">🛰️</div>'
+        '<div style="font-family:\'IBM Plex Mono\',monospace;color:#2563eb;font-size:1rem;margin-bottom:0.5rem;">Ready for Analysis</div>'
+        '<div style="color:#6b7280;font-size:0.85rem;max-width:420px;margin:0 auto;">'
+        'Configure your image source in the sidebar, then click <strong>Run Analysis</strong>.'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
     st.stop()
 
 if not uploaded_t1 and not gee_params:
-    st.markdown("""
-    <div class="geo-card geo-card-error">
-        ⚠️ <strong>No image source.</strong>
-        Upload an image or configure GEE fetch in the sidebar.
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="geo-card geo-card-error">⚠️ <strong>No image source.</strong> '
+        'Upload an image or configure GEE fetch in the sidebar.</div>',
+        unsafe_allow_html=True
+    )
     st.stop()
 
 
@@ -788,21 +739,22 @@ if not uploaded_t1 and not gee_params:
 pipeline_warnings = []
 status     = st.status("Running geospatial analysis pipeline…", expanded=True)
 temp_files = []
+meta_t1    = {}
 
 try:
     with status:
         st.write("📦 Loading pipeline modules…")
 
         try:    from geospatial_platform.context       import InputContext
-        except Exception as e: import_error_card("context→InputContext", e); st.stop()
+        except Exception as e: import_error_card("context->InputContext", e); st.stop()
         try:    from geospatial_platform.input_handler import build_input_context
-        except Exception as e: import_error_card("input_handler→build_input_context", e); st.stop()
+        except Exception as e: import_error_card("input_handler->build_input_context", e); st.stop()
         try:    from geospatial_platform.input_handler import load_image
-        except Exception as e: import_error_card("input_handler→load_image", e); st.stop()
+        except Exception as e: import_error_card("input_handler->load_image", e); st.stop()
         try:    from geospatial_platform.image_processor import process_image
-        except Exception as e: import_error_card("image_processor→process_image", e); st.stop()
+        except Exception as e: import_error_card("image_processor->process_image", e); st.stop()
         try:    from geospatial_platform.vision_model  import extract_vit_features
-        except Exception as e: import_error_card("vision_model→extract_vit_features", e); st.stop()
+        except Exception as e: import_error_card("vision_model->extract_vit_features", e); st.stop()
 
         build_climate_summary = populate_convenience_fields = None
         try:
@@ -811,16 +763,15 @@ try:
             )
         except ImportError:
             try:    from geospatial_platform.data_integrator import integrate_data
-            except Exception as e: import_error_card("data_integrator→integrate_data", e); st.stop()
+            except Exception as e: import_error_card("data_integrator->integrate_data", e); st.stop()
 
-        try:    from geospatial_platform.rag       import retrieve_context
-        except Exception as e: import_error_card("rag→retrieve_context", e); st.stop()
+        try:    from geospatial_platform.rag        import retrieve_context
+        except Exception as e: import_error_card("rag->retrieve_context", e); st.stop()
         try:    from geospatial_platform.llm_engine import generate_report
-        except Exception as e: import_error_card("llm_engine→generate_report", e); st.stop()
+        except Exception as e: import_error_card("llm_engine->generate_report", e); st.stop()
 
         # ── GEE fetch ─────────────────────────────────────────────────────────
         path_t1 = path_t2 = path_csv = None
-        meta_t1 = {}
 
         if gee_params:
             st.write("🛰️ Fetching imagery from Google Earth Engine…")
@@ -830,36 +781,47 @@ try:
                     auto_select_sensor, SENSOR_CONFIGS,
                 )
 
-                # ── Safe credential check (no key values shown) ───────────────
+                # Safe credential check
                 st.write("🔍 Checking GEE credentials…")
                 sa_info = st.secrets.get("GEE_SERVICE_ACCOUNT", None)
                 if sa_info is None:
                     st.error("❌ GEE_SERVICE_ACCOUNT missing from Streamlit secrets."); st.stop()
-                missing = [k for k in ["project_id","private_key_id","private_key",
-                                        "client_email","client_id"]
-                           if not sa_info.get(k)]
-                if missing:
-                    st.error(f"❌ Missing secret fields: {missing}"); st.stop()
-                raw_key = sa_info.get("private_key","")
+                missing_keys = [k for k in ["project_id","private_key_id","private_key",
+                                             "client_email","client_id"] if not sa_info.get(k)]
+                if missing_keys:
+                    st.error("❌ Missing secret fields: " + str(missing_keys)); st.stop()
+                raw_key = sa_info.get("private_key", "")
                 if "BEGIN PRIVATE KEY" not in raw_key:
-                    st.error("❌ private_key is malformed."); st.stop()
-                st.write(f"  ✅ Service account: `{sa_info.get('client_email')}`")
-                st.write(f"  ✅ Project: `{sa_info.get('project_id')}`")
-                st.write(f"  ✅ Private key: present ({len(raw_key)} chars)")
+                    st.error("❌ private_key is malformed — missing BEGIN PRIVATE KEY header.")
+                    st.info("Tip: In Streamlit secrets, the private_key value must be a single "
+                            "quoted string with \\n characters, not real line breaks.")
+                    st.stop()
+                st.write("  ✅ Service account: `" + str(sa_info.get("client_email")) + "`")
+                st.write("  ✅ Project: `" + str(sa_info.get("project_id")) + "`")
+                st.write("  ✅ Private key: present (" + str(len(raw_key)) + " chars)")
 
                 st.write("🔐 Initialising GEE…")
                 try:    gee_ok = init_gee()
                 except Exception as e:
                     import traceback
-                    st.error(f"❌ init_gee() raised: {e}")
+                    st.error("❌ init_gee() raised: " + str(e))
                     st.code(traceback.format_exc()); st.stop()
                 if not gee_ok:
-                    st.error("❌ GEE initialisation failed."); st.stop()
+                    st.error("❌ GEE initialisation failed. Check Streamlit Cloud logs for [GEE] print statements.")
+                    st.info(
+                        "Common causes:\n"
+                        "1. private_key has wrong newline format\n"
+                        "2. Earth Engine API not enabled in Google Cloud project\n"
+                        "3. Service account lacks Earth Engine access\n"
+                        "4. New key not yet propagated — wait 1-2 min and retry"
+                    )
+                    st.stop()
                 st.write("✅ GEE initialized")
 
                 sensor1 = gee_params.get("sensor") or auto_select_sensor(gee_params["year1"])
-                st.write(f"Sensor: `{sensor1}` | Year: `{gee_params['year1']}` | "
-                         f"Lat: `{gee_params['lat']:.4f}` | Lon: `{gee_params['lon']:.4f}`")
+                st.write("Sensor: `" + sensor1 + "` | Year: `" + str(gee_params["year1"]) +
+                         "` | Lat: `" + str(round(gee_params["lat"],4)) +
+                         "` | Lon: `" + str(round(gee_params["lon"],4)) + "`")
 
                 try:
                     import ee
@@ -868,58 +830,59 @@ try:
                     cfg   = SENSOR_CONFIGS[sensor1]
                     col   = (ee.ImageCollection(cfg["collection"])
                               .filterBounds(aoi)
-                              .filterDate(f"{gee_params['year1']}-01-01",
-                                          f"{gee_params['year1']}-12-31")
+                              .filterDate(str(gee_params["year1"])+"-01-01",
+                                          str(gee_params["year1"])+"-12-31")
                               .filter(ee.Filter.lt(cfg["cloud_prop"], 80)))
                     count = col.size().getInfo()
-                    st.write(f"📡 Scenes Year 1 (cloud<80%): `{count}`")
+                    st.write("📡 Scenes Year 1 (cloud<80%): `" + str(count) + "`")
                     if count == 0:
-                        st.error("❌ No scenes found. Try a different year or larger buffer.")
-                        st.stop()
+                        st.error("❌ No scenes found. Try a different year or larger buffer."); st.stop()
                 except Exception as se:
-                    st.warning(f"Scene count check failed (non-fatal): {se}")
+                    st.warning("Scene count check failed (non-fatal): " + str(se))
 
-                st.write(f"  Downloading image for `{gee_params['year1']}`…")
-                try:
-                    result1 = fetch_image_as_array(
-                        lat=gee_params["lat"], lon=gee_params["lon"],
-                        year=gee_params["year1"], sensor=sensor1,
-                        buffer_km=gee_params["buffer_km"],
-                    )
-                except RuntimeError as ge:
-                    st.error("❌ GEE download failed"); st.code(str(ge)); st.stop()
+                st.write("  Downloading image for `" + str(gee_params["year1"]) + "`…")
+                result1 = fetch_image_as_array(
+                    lat=gee_params["lat"], lon=gee_params["lon"],
+                    year=gee_params["year1"], sensor=sensor1,
+                    buffer_km=gee_params["buffer_km"],
+                )
+                if result1 is None:
+                    st.error("❌ GEE image download failed. Check Streamlit Cloud logs for [GEE] traceback.")
+                    st.stop()
                 array_t1, meta_t1 = result1
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
                     path_t1 = tmp.name
                 path_t1 = save_array_as_geotiff(array_t1, meta_t1, path_t1)
                 temp_files.append(path_t1)
-                st.write(f"  ✓ Image 1 (`{gee_params['year1']}`) shape: `{array_t1.shape}`")
+                st.write("  ✓ Image 1 (`" + str(gee_params["year1"]) + "`) shape: `" + str(array_t1.shape) + "`")
 
                 if gee_params["year2"] != gee_params["year1"]:
                     sensor2 = gee_params.get("sensor") or auto_select_sensor(gee_params["year2"])
-                    st.write(f"  Downloading image for `{gee_params['year2']}`…")
-                    try:
-                        result2 = fetch_image_as_array(
-                            lat=gee_params["lat"], lon=gee_params["lon"],
-                            year=gee_params["year2"], sensor=sensor2,
-                            buffer_km=gee_params["buffer_km"],
-                        )
+                    st.write("  Downloading image for `" + str(gee_params["year2"]) + "`…")
+                    result2 = fetch_image_as_array(
+                        lat=gee_params["lat"], lon=gee_params["lon"],
+                        year=gee_params["year2"], sensor=sensor2,
+                        buffer_km=gee_params["buffer_km"],
+                    )
+                    if result2 is not None:
                         array_t2, meta_t2 = result2
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".tif") as tmp:
                             path_t2 = tmp.name
                         path_t2 = save_array_as_geotiff(array_t2, meta_t2, path_t2)
                         temp_files.append(path_t2)
-                        st.write(f"  ✓ Image 2 (`{gee_params['year2']}`) shape: `{array_t2.shape}`")
-                    except RuntimeError as ge2:
-                        pipeline_warnings.append(f"Image 2 failed — temporal skipped.\n{ge2}")
+                        st.write("  ✓ Image 2 (`" + str(gee_params["year2"]) + "`) shape: `" + str(array_t2.shape) + "`")
+                    else:
+                        pipeline_warnings.append("Image 2 fetch failed — temporal analysis skipped.")
 
             except Exception as e:
                 import traceback
-                st.error(f"❌ GEE error: {e}"); st.code(traceback.format_exc()); st.stop()
+                st.error("❌ GEE error: " + str(e)); st.code(traceback.format_exc()); st.stop()
         else:
             st.write("📥 Saving uploaded files…")
-            if uploaded_t1: path_t1 = save_upload_to_temp(uploaded_t1); temp_files.append(path_t1)
-            if uploaded_t2: path_t2 = save_upload_to_temp(uploaded_t2); temp_files.append(path_t2)
+            if uploaded_t1:
+                path_t1 = save_upload_to_temp(uploaded_t1); temp_files.append(path_t1)
+            if uploaded_t2:
+                path_t2 = save_upload_to_temp(uploaded_t2); temp_files.append(path_t2)
 
         if uploaded_csv:
             path_csv = save_upload_to_temp(uploaded_csv); temp_files.append(path_csv)
@@ -946,7 +909,7 @@ try:
         st.write("🔬 Computing spectral indices…")
         ic = process_image(ic)
 
-        if path_t2 and getattr(ic,"image_array_t2",None) is not None:
+        if path_t2 and getattr(ic, "image_array_t2", None) is not None:
             st.write("📅 Computing temporal NDVI delta…")
             from geospatial_platform.image_processor import (
                 compute_ndvi, detect_sensor, BAND_CONFIG,
@@ -974,7 +937,7 @@ try:
                 if ic.ndvi_delta is not None and abs(ic.ndvi_delta) > 0.05:
                     direction = "improvement" if ic.ndvi_delta > 0 else "decline"
                     ic.anomalies = list(ic.anomalies or [])
-                    ic.anomalies.append(f"vegetation {direction} detected (ΔNDVI={ic.ndvi_delta:+.3f})")
+                    ic.anomalies.append("vegetation " + direction + " detected (NDVI=" + "{:+.3f}".format(ic.ndvi_delta) + ")")
 
         st.write("🧠 Extracting Vision Transformer features…")
         ic = extract_vit_features(ic)
@@ -983,11 +946,11 @@ try:
             st.write("📊 Integrating uploaded climate CSV…")
             try:
                 ic = integrate_data(ic)
-                df = getattr(ic,"csv_df",None)
+                df = getattr(ic, "csv_df", None)
                 if df is not None and build_climate_summary:
                     ic.climate_summary = build_climate_summary(df)
                     if populate_convenience_fields: populate_convenience_fields(ic)
-            except Exception as e: pipeline_warnings.append(f"Climate integration failed: {e}")
+            except Exception as e: pipeline_warnings.append("Climate integration failed: " + str(e))
         elif climate_mode == "Auto-fetch (NASA POWER)":
             st.write("🌍 Auto-fetching climate data from NASA POWER…")
             try:
@@ -999,21 +962,21 @@ try:
                     if cdf is not None:
                         qr = climate_data_quality_report(cdf)
                         if not qr["suitable"]:
-                            pipeline_warnings.append(f"NASA POWER: {qr['n_years']} yrs, {qr['missing_rain']} missing.")
+                            pipeline_warnings.append("NASA POWER: " + str(qr["n_years"]) + " yrs, " + str(qr["missing_rain"]) + " missing.")
                         ic.csv_df = cdf; ic = integrate_data(ic)
                         if build_climate_summary: ic.climate_summary = build_climate_summary(ic.csv_df)
                         if populate_convenience_fields: populate_convenience_fields(ic)
-                        st.write(f"  ✓ {qr['n_years']} years of climate data fetched")
+                        st.write("  ✓ " + str(qr["n_years"]) + " years of climate data fetched")
                     else: pipeline_warnings.append("NASA POWER returned no data.")
                 else: pipeline_warnings.append("Coordinates unavailable for NASA POWER.")
-            except Exception as e: pipeline_warnings.append(f"NASA POWER failed: {e}")
+            except Exception as e: pipeline_warnings.append("NASA POWER failed: " + str(e))
         else:
             st.write("📊 No climate data — skipping.")
 
         st.write("📚 Retrieving environmental context (RAG)…")
         ic = retrieve_context(ic)
-        if not getattr(ic,"rag_context",None):
-            ic.rag_context = getattr(ic,"retrieved_context","") or ""
+        if not getattr(ic, "rag_context", None):
+            ic.rag_context = getattr(ic, "retrieved_context", "") or ""
 
         ic.ndvi_timeseries = ic.ndvi_trend_stats = None
         if fetch_timeseries:
@@ -1030,17 +993,17 @@ try:
                                                        month_start=ms, month_end=me)
                         if tsdf is not None:
                             ic.ndvi_timeseries = tsdf; ic.ndvi_trend_stats = compute_trend(tsdf)
-                            st.write(f"  ✓ {len(tsdf)} years of NDVI data")
+                            st.write("  ✓ " + str(len(tsdf)) + " years of NDVI data")
                         else: pipeline_warnings.append("NDVI time series returned no data.")
                     else: pipeline_warnings.append("Coordinates unavailable for time series.")
                 else: pipeline_warnings.append("GEE not initialised — time series skipped.")
-            except Exception as e: pipeline_warnings.append(f"Time series failed: {e}")
+            except Exception as e: pipeline_warnings.append("Time series failed: " + str(e))
 
-        for attr in ("ndvi","ndwi","ndbi"):
+        for attr in ("ndvi", "ndwi", "ndbi"):
             arr = getattr(ic, attr, None)
-            if arr is not None and getattr(ic, f"{attr}_mean", None) is None:
-                setattr(ic, f"{attr}_mean", float(np.nanmean(arr)))
-                setattr(ic, f"{attr}_map",  arr)
+            if arr is not None and getattr(ic, attr+"_mean", None) is None:
+                setattr(ic, attr+"_mean", float(np.nanmean(arr)))
+                setattr(ic, attr+"_map",  arr)
 
         if not getattr(ic,"region",None):    ic.region    = ic.image_meta.get("region_name","Unknown region")
         if not getattr(ic,"ecosystem",None): ic.ecosystem = ic.image_meta.get("ecosystem","Mixed landscape")
@@ -1063,10 +1026,11 @@ try:
 
 except Exception as e:
     status.update(label="❌ Pipeline error", state="error", expanded=True)
-    st.markdown(f"""<div class="geo-card geo-card-error">
-        <strong>Pipeline failed:</strong><br><br>
-        <code style="font-size:0.78rem;">{type(e).__name__}: {e}</code>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="geo-card geo-card-error"><strong>Pipeline failed:</strong><br><br>'
+        '<code style="font-size:0.78rem;">' + type(e).__name__ + ': ' + str(e) + '</code></div>',
+        unsafe_allow_html=True
+    )
     st.exception(e); st.stop()
 finally:
     for p in temp_files:
@@ -1078,176 +1042,183 @@ finally:
 # SHARED RESULT VARIABLES
 # ══════════════════════════════════════════════════════════════════════════════
 
-region_str   = getattr(ic,"region",None) or ic.image_meta.get("region_name","Unknown region")
-eco_str      = getattr(ic,"ecosystem",None) or "—"
-t1_label     = getattr(ic,"temporal_label_t1",None)
-t2_label     = getattr(ic,"temporal_label_t2",None)
-temporal_str = f"{t1_label} → {t2_label}" if t1_label and t2_label else "Single image"
-ndvi         = getattr(ic,"ndvi_mean",None)
-ndwi         = getattr(ic,"ndwi_mean",None)
-ndbi         = getattr(ic,"ndbi_mean",None)
-ai_val       = getattr(ic,"aridity_index",None)
-delta        = getattr(ic,"ndvi_delta",None)
-ndvi_t1_val  = getattr(ic,"ndvi_mean_t1",None)
-ndvi_t2_val  = getattr(ic,"ndvi_mean_t2",None)
-score        = getattr(ic,"confidence_score",None) or 0
-land_cover   = getattr(ic,"land_cover",None)
-anomalies    = getattr(ic,"anomalies",None)
-ndvi_map     = getattr(ic,"ndvi_map",None)
-ndwi_map     = getattr(ic,"ndwi_map",None)
-ndbi_map     = getattr(ic,"ndbi_map",None)
-delta_map    = getattr(ic,"ndvi_trend_map",None)
-ts_df        = getattr(ic,"ndvi_timeseries",None)
-ts_trend     = getattr(ic,"ndvi_trend_stats",None)
-report       = getattr(ic,"report",None)
-climate_sum  = getattr(ic,"climate_summary",None)
+region_str  = getattr(ic,"region",None) or ic.image_meta.get("region_name","Unknown region")
+eco_str     = getattr(ic,"ecosystem",None) or "—"
+t1_label    = getattr(ic,"temporal_label_t1",None)
+t2_label    = getattr(ic,"temporal_label_t2",None)
+temporal_str= (str(t1_label) + " → " + str(t2_label)) if t1_label and t2_label else "Single image"
+ndvi        = getattr(ic,"ndvi_mean",None)
+ndwi        = getattr(ic,"ndwi_mean",None)
+ndbi        = getattr(ic,"ndbi_mean",None)
+ai_val      = getattr(ic,"aridity_index",None)
+delta       = getattr(ic,"ndvi_delta",None)
+ndvi_t1_val = getattr(ic,"ndvi_mean_t1",None)
+ndvi_t2_val = getattr(ic,"ndvi_mean_t2",None)
+score       = getattr(ic,"confidence_score",None) or 0
+land_cover  = getattr(ic,"land_cover",None)
+anomalies   = getattr(ic,"anomalies",None)
+ndvi_map    = getattr(ic,"ndvi_map",None)
+ndwi_map    = getattr(ic,"ndwi_map",None)
+ndbi_map    = getattr(ic,"ndbi_map",None)
+delta_map   = getattr(ic,"ndvi_trend_map",None)
+ts_df       = getattr(ic,"ndvi_timeseries",None)
+ts_trend    = getattr(ic,"ndvi_trend_stats",None)
+report      = getattr(ic,"report",None)
+climate_sum = getattr(ic,"climate_summary",None)
+lc_colors   = {"water":"#3b82f6","vegetation":"#22c55e","urban":"#f59e0b","barren":"#94a3b8"}
 
 
-# ── Helper: render overview content (shared by tab 1 & Full Report tab) ──────
+# ══════════════════════════════════════════════════════════════════════════════
+# SHARED RENDER FUNCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _render_overview_content():
-    st.markdown(f"""
-    <div class="geo-card geo-card-accent">
-        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
-            <div>
-                <div class="label-mono">Region</div>
-                <div style="font-size:1.05rem;font-weight:600;color:#1a1f2e;margin-top:0.2rem;">
-                    📍 {region_str}</div>
-                <div style="font-size:0.8rem;color:#6b7280;margin-top:0.2rem;">{eco_str}</div>
-            </div>
-            <div style="text-align:right;">
-                <div class="label-mono">Temporal Coverage</div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:0.9rem;
-                            color:#2563eb;margin-top:0.2rem;">📅 {temporal_str}</div>
-            </div>
-        </div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="geo-card geo-card-accent">'
+        '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">'
+        '<div><div class="label-mono">Region</div>'
+        '<div style="font-size:1.05rem;font-weight:600;color:#1a1f2e;margin-top:0.2rem;">📍 ' + region_str + '</div>'
+        '<div style="font-size:0.8rem;color:#6b7280;margin-top:0.2rem;">' + eco_str + '</div></div>'
+        '<div style="text-align:right;"><div class="label-mono">Temporal Coverage</div>'
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.9rem;color:#2563eb;margin-top:0.2rem;">📅 ' + temporal_str + '</div>'
+        '</div></div></div>',
+        unsafe_allow_html=True
+    )
 
     col1, col2 = st.columns([1.2, 1])
     with col1:
         st.markdown("## Spectral Indices")
         chips = ""
-        if ndvi  is not None: chips += f'<div class="metric-chip">NDVI<span>{ndvi:.3f}</span></div>'
-        if ndwi  is not None: chips += f'<div class="metric-chip">NDWI<span>{ndwi:.3f}</span></div>'
-        if ndbi  is not None: chips += f'<div class="metric-chip">NDBI<span>{ndbi:.3f}</span></div>'
-        if ai_val is not None: chips += f'<div class="metric-chip">Aridity<span>{ai_val:.3f}</span></div>'
-        if delta is not None:
+        if ndvi   is not None: chips += '<div class="metric-chip">NDVI<span>'    + "{:.3f}".format(ndvi)   + '</span></div>'
+        if ndwi   is not None: chips += '<div class="metric-chip">NDWI<span>'    + "{:.3f}".format(ndwi)   + '</span></div>'
+        if ndbi   is not None: chips += '<div class="metric-chip">NDBI<span>'    + "{:.3f}".format(ndbi)   + '</span></div>'
+        if ai_val is not None: chips += '<div class="metric-chip">Aridity<span>' + "{:.3f}".format(ai_val) + '</span></div>'
+        if delta  is not None:
             sign = "+" if delta >= 0 else ""
             dc   = "#16a34a" if delta >= 0 else "#dc2626"
-            chips += f'<div class="metric-chip">ΔNDVI<span style="color:{dc}">{sign}{delta:.3f}</span></div>'
-        st.markdown(f'<div class="metric-row">{chips}</div>', unsafe_allow_html=True)
+            chips += '<div class="metric-chip">ΔNDVI<span style="color:' + dc + '">' + sign + "{:.3f}".format(delta) + '</span></div>'
+        st.markdown('<div class="metric-row">' + chips + '</div>', unsafe_allow_html=True)
 
         if land_cover:
-            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:1.05rem;'
-                        'font-weight:600;color:#2563eb;border-bottom:1px solid #dde3ed;'
-                        'padding-bottom:0.4rem;margin:1rem 0 0.6rem 0;">Land Cover</div>',
-                        unsafe_allow_html=True)
+            st.markdown(
+                '<div style="font-family:IBM Plex Mono,monospace;font-size:1.05rem;font-weight:600;'
+                'color:#2563eb;border-bottom:1px solid #dde3ed;padding-bottom:0.4rem;margin:1rem 0 0.6rem 0;">'
+                'Land Cover</div>',
+                unsafe_allow_html=True
+            )
             st.markdown(render_land_cover_bar(land_cover), unsafe_allow_html=True)
             lcc = st.columns(4)
-            lc_colors = {"water":"#3b82f6","vegetation":"#22c55e","urban":"#f59e0b","barren":"#94a3b8"}
-            for i,(cls,pct) in enumerate(land_cover.items()):
-                with lcc[i%4]:
-                    c = lc_colors.get(cls,"#94a3b8")
-                    st.markdown(f"""<div style="text-align:center;margin-top:0.5rem;">
-                        <div style="width:12px;height:12px;background:{c};border-radius:2px;margin:0 auto 3px;"></div>
-                        <div class="label-mono">{cls}</div>
-                        <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;
-                                    color:#1a1f2e;font-weight:600;">{pct:.1f}%</div>
-                    </div>""", unsafe_allow_html=True)
+            for i, (cls, pct) in enumerate(land_cover.items()):
+                with lcc[i % 4]:
+                    c = lc_colors.get(cls, "#94a3b8")
+                    st.markdown(
+                        '<div style="text-align:center;margin-top:0.5rem;">'
+                        '<div style="width:12px;height:12px;background:' + c + ';border-radius:2px;margin:0 auto 3px;"></div>'
+                        '<div class="label-mono">' + cls + '</div>'
+                        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;color:#1a1f2e;font-weight:600;">'
+                        + "{:.1f}".format(pct) + '%</div></div>',
+                        unsafe_allow_html=True
+                    )
 
         if anomalies:
             st.markdown("## Detected Anomalies")
-            tags = "".join(f'<span class="anomaly-tag">⚠ {a}</span>' for a in anomalies)
-            st.markdown(f"<div>{tags}</div>", unsafe_allow_html=True)
+            tags = "".join('<span class="anomaly-tag">⚠ ' + a + '</span>' for a in anomalies)
+            st.markdown('<div>' + tags + '</div>', unsafe_allow_html=True)
 
     with col2:
         st.markdown("## Confidence Score")
-        lc = "#16a34a" if score>=75 else "#d97706" if score>=55 else "#dc2626"
-        lt = "High"    if score>=75 else "Moderate" if score>=55 else "Low"
-        st.markdown(f"""<div class="geo-card">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;">
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:2rem;
-                            color:{lc};font-weight:600;">{score:.0f}%</div>
-                <div class="label-mono">{lt} confidence</div>
-            </div>
-            {render_confidence_bar(score)}
-        </div>""", unsafe_allow_html=True)
+        lc_c = "#16a34a" if score>=75 else "#d97706" if score>=55 else "#dc2626"
+        lt   = "High"    if score>=75 else "Moderate" if score>=55 else "Low"
+        st.markdown(
+            '<div class="geo-card">'
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;">'
+            '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:2rem;color:' + lc_c + ';font-weight:600;">'
+            + "{:.0f}".format(score) + '%</div>'
+            '<div class="label-mono">' + lt + ' confidence</div></div>'
+            + render_confidence_bar(score) + '</div>',
+            unsafe_allow_html=True
+        )
 
         st.markdown("## Image Metadata")
         meta = ic.image_meta
         mitems = [
             ("Format",     getattr(ic,"image_format","—")),
             ("Bands",      str(getattr(ic,"n_bands","—"))),
-            ("Dimensions", f"{meta.get('width','?')} × {meta.get('height','?')} px"),
+            ("Dimensions", str(meta.get("width","?")) + " × " + str(meta.get("height","?")) + " px"),
             ("CRS",        meta.get("crs","—")),
             ("Context",    meta.get("region_context","—")),
         ]
-        rows = "".join(f"""<div class="meta-row">
-            <span class="label-mono">{k}</span>
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:0.78rem;
-                         color:#374151;text-align:right;max-width:55%;">{v}</span>
-        </div>""" for k,v in mitems)
-        st.markdown(f'<div class="geo-card">{rows}</div>', unsafe_allow_html=True)
+        rows = "".join(
+            '<div class="meta-row">'
+            '<span class="label-mono">' + k + '</span>'
+            '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.78rem;color:#374151;text-align:right;max-width:55%;">' + str(v) + '</span>'
+            '</div>'
+            for k, v in mitems
+        )
+        st.markdown('<div class="geo-card">' + rows + '</div>', unsafe_allow_html=True)
 
         if climate_sum:
             st.markdown("## Climate Snapshot")
-            cs = climate_sum
             cpairs = [
-                ("Rainfall (latest)", f"{cs.get('rainfall_mm_latest',0):.1f} mm"),
-                ("Rainfall trend",    cs.get("rainfall_mm_trend","—").capitalize()),
-                ("Temperature",       f"{cs.get('temperature_c_latest',0):.1f} °C"),
-                ("Humidity",          f"{cs.get('humidity_pct_latest',0):.1f} %"),
+                ("Rainfall (latest)", "{:.1f}".format(climate_sum.get("rainfall_mm_latest",0)) + " mm"),
+                ("Rainfall trend",    str(climate_sum.get("rainfall_mm_trend","—")).capitalize()),
+                ("Temperature",       "{:.1f}".format(climate_sum.get("temperature_c_latest",0)) + " °C"),
+                ("Humidity",          "{:.1f}".format(climate_sum.get("humidity_pct_latest",0)) + " %"),
             ]
-            rows = "".join(f"""<div class="meta-row">
-                <span class="label-mono">{k}</span>
-                <span style="font-family:'IBM Plex Mono',monospace;font-size:0.78rem;color:#374151;">{v}</span>
-            </div>""" for k,v in cpairs)
-            st.markdown(f'<div class="geo-card">{rows}</div>', unsafe_allow_html=True)
+            rows = "".join(
+                '<div class="meta-row">'
+                '<span class="label-mono">' + k + '</span>'
+                '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.78rem;color:#374151;">' + v + '</span>'
+                '</div>'
+                for k, v in cpairs
+            )
+            st.markdown('<div class="geo-card">' + rows + '</div>', unsafe_allow_html=True)
         else:
-            st.markdown("""<div class="geo-card" style="text-align:center;color:#9ca3af;
-                            font-size:0.8rem;padding:1.5rem;">No climate data uploaded.</div>""",
-                        unsafe_allow_html=True)
+            st.markdown(
+                '<div class="geo-card" style="text-align:center;color:#9ca3af;font-size:0.8rem;padding:1.5rem;">'
+                'No climate data uploaded.</div>',
+                unsafe_allow_html=True
+            )
 
 
 def _render_index_maps_content():
     st.markdown("## Spectral Index Maps")
-    available = [(ndvi_map,"NDVI — Vegetation Density","RdYlGn"),
-                 (ndwi_map,"NDWI — Water Content","Blues_r"),
-                 (ndbi_map,"NDBI — Built-up Index","YlOrRd")]
-    available = [(a,t,c) for a,t,c in available if a is not None]
+    available = []
+    if ndvi_map is not None: available.append((ndvi_map, "NDVI — Vegetation Density", "RdYlGn"))
+    if ndwi_map is not None: available.append((ndwi_map, "NDWI — Water Content",      "Blues_r"))
+    if ndbi_map is not None: available.append((ndbi_map, "NDBI — Built-up Index",     "YlOrRd"))
+
     if not available:
-        st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">'
-                    'No index maps available.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">No index maps available.</div>', unsafe_allow_html=True)
     else:
         cols = st.columns(len(available))
-        for col,(arr,title,cmap) in zip(cols,available):
+        for col, (arr, title, cmap) in zip(cols, available):
             with col:
                 fig = render_index_map(arr, title, cmap)
                 st.pyplot(fig, use_container_width=True); plt.close(fig)
 
     if delta is not None and ndvi_t1_val is not None and ndvi_t2_val is not None:
         st.markdown("## Temporal NDVI Comparison")
-        card_cls    = "geo-card-good" if delta>=0 else "geo-card-error"
-        arrow       = f"↑ +{delta:.3f}" if delta>=0 else f"↓ {delta:.3f}"
-        arrow_color = "#16a34a" if delta>=0 else "#dc2626"
-        st.markdown(f"""<div class="geo-card {card_cls}">
-            <div style="display:flex;gap:2.5rem;align-items:center;flex-wrap:wrap;">
-                <div><div class="label-mono">{t1_label or 'Image 1'}</div>
-                     <div style="font-family:'IBM Plex Mono',monospace;font-size:1.4rem;color:#1a1f2e;">{ndvi_t1_val:.3f}</div></div>
-                <div style="font-size:1.4rem;color:#9ca3af;">→</div>
-                <div><div class="label-mono">{t2_label or 'Image 2'}</div>
-                     <div style="font-family:'IBM Plex Mono',monospace;font-size:1.4rem;color:#1a1f2e;">{ndvi_t2_val:.3f}</div></div>
-                <div style="margin-left:1rem;">
-                    <div class="label-mono">Change (ΔNDVI)</div>
-                    <div style="font-family:'IBM Plex Mono',monospace;font-size:1.6rem;
-                                color:{arrow_color};font-weight:700;">{arrow}</div>
-                </div>
-            </div>
-        </div>""", unsafe_allow_html=True)
+        card_cls    = "geo-card-good" if delta >= 0 else "geo-card-error"
+        arrow       = "↑ +" + "{:.3f}".format(delta) if delta >= 0 else "↓ " + "{:.3f}".format(delta)
+        arrow_color = "#16a34a" if delta >= 0 else "#dc2626"
+        st.markdown(
+            '<div class="geo-card ' + card_cls + '">'
+            '<div style="display:flex;gap:2.5rem;align-items:center;flex-wrap:wrap;">'
+            '<div><div class="label-mono">' + str(t1_label or "Image 1") + '</div>'
+            '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.4rem;color:#1a1f2e;">' + "{:.3f}".format(ndvi_t1_val) + '</div></div>'
+            '<div style="font-size:1.4rem;color:#9ca3af;">→</div>'
+            '<div><div class="label-mono">' + str(t2_label or "Image 2") + '</div>'
+            '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.4rem;color:#1a1f2e;">' + "{:.3f}".format(ndvi_t2_val) + '</div></div>'
+            '<div style="margin-left:1rem;"><div class="label-mono">Change (ΔNDVI)</div>'
+            '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.6rem;color:' + arrow_color + ';font-weight:700;">' + arrow + '</div>'
+            '</div></div></div>',
+            unsafe_allow_html=True
+        )
 
     if delta_map is not None:
         st.markdown("## ΔNDVI Spatial Change Map")
-        st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">'
-                    'Green = vegetation gain · Red = vegetation loss</div>', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:0.5rem;">Green = vegetation gain · Red = vegetation loss</div>', unsafe_allow_html=True)
         fig_d = render_index_map(delta_map, "ΔNDVI Change Map (pixel-wise)", "RdYlGn")
         st.pyplot(fig_d, use_container_width=True); plt.close(fig_d)
 
@@ -1255,111 +1226,97 @@ def _render_index_maps_content():
         st.markdown("## NDVI Time Series (Annual)")
         try:
             from time_series import render_time_series_chart
-            fig_ts = render_time_series_chart(ts_df, ts_trend or {},
-                                               ecosystem=getattr(ic,"ecosystem","") or "")
+            fig_ts = render_time_series_chart(ts_df, ts_trend or {}, ecosystem=getattr(ic,"ecosystem","") or "")
             st.pyplot(fig_ts, use_container_width=True); plt.close(fig_ts)
             if ts_trend:
-                tc = "#16a34a" if (ts_trend.get("slope") or 0)>0 else "#dc2626"
-                st.markdown(f"""<div class="metric-row">
-                    <div class="metric-chip">Trend<span>{ts_trend.get('trend','—')}</span></div>
-                    <div class="metric-chip">Rate<span style="color:{tc}">{ts_trend.get('annual_rate',0):+.4f}/yr</span></div>
-                    <div class="metric-chip">Total Δ<span style="color:{tc}">{ts_trend.get('total_change',0):+.3f}</span></div>
-                    <div class="metric-chip">R²<span>{ts_trend.get('r2',0):.2f}</span></div>
-                </div>""", unsafe_allow_html=True)
+                tc = "#16a34a" if (ts_trend.get("slope") or 0) > 0 else "#dc2626"
+                st.markdown(
+                    '<div class="metric-row">'
+                    '<div class="metric-chip">Trend<span>' + str(ts_trend.get("trend","—")) + '</span></div>'
+                    '<div class="metric-chip">Rate<span style="color:' + tc + '">' + "{:+.4f}".format(ts_trend.get("annual_rate",0)) + '/yr</span></div>'
+                    '<div class="metric-chip">Total Δ<span style="color:' + tc + '">' + "{:+.3f}".format(ts_trend.get("total_change",0)) + '</span></div>'
+                    '<div class="metric-chip">R²<span>' + "{:.2f}".format(ts_trend.get("r2",0)) + '</span></div>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
         except Exception as e:
-            st.caption(f"Time series chart error: {e}")
+            st.caption("Time series chart error: " + str(e))
+
+
+def _render_ai_report():
+    if not report:
+        st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">Report not generated.</div>', unsafe_allow_html=True)
+        return
+    first_s = report.find("## 1.")
+    if first_s == -1: first_s = report.find("## ")
+    report_body = report[first_s:] if first_s != -1 else report
+    fm = re.search(r'\n={10,}\s*\nConfidence:', report_body)
+    if fm: report_body = report_body[:fm.start()].strip()
+    else:  report_body = re.sub(r'\n={10,}.*$', '', report_body, flags=re.DOTALL).strip()
+    sections = parse_report_sections(report_body)
+    if sections:
+        for title, content in sections.items():
+            render_report_section(title, content, get_icon(title))
+    else:
+        st.markdown('<div class="report-section" style="white-space:pre-wrap;">' + report + '</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# THREE TABS
+# RESULTS DASHBOARD — THREE TABS
 # ══════════════════════════════════════════════════════════════════════════════
 
 tab_overview, tab_maps, tab_report = st.tabs([
     "  📊 Overview  ", "  🗺️ Index Maps  ", "  📄 Full Report  ",
 ])
 
-# ── TAB 1: Overview (unchanged) ───────────────────────────────────────────────
 with tab_overview:
     _render_overview_content()
 
-# ── TAB 2: Index Maps (unchanged) ────────────────────────────────────────────
 with tab_maps:
     _render_index_maps_content()
 
-# ── TAB 3: Full Report = Overview + Maps + Guide + AI Report + PDF download ──
 with tab_report:
+    st.markdown("## Full Analysis Report")
 
-    # User guide (collapsible)
-    with st.expander("📖 Plain-language guide — what do these numbers mean?", expanded=False):
-        render_user_guide()
-
-    st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
-
-    # Overview content
-    st.markdown("## 📊 Overview", unsafe_allow_html=False)
+    # Overview summary
     _render_overview_content()
-
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
 
-    # Index maps content
-    st.markdown("## 🗺️ Index Maps", unsafe_allow_html=False)
+    # Index maps
     _render_index_maps_content()
+    st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
+
+    # AI report
+    st.markdown("## AI-Generated Scientific Report")
+    _render_ai_report()
 
     st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
 
-    # AI report sections
-    st.markdown("## 📄 Scientific Report")
-    if not report:
-        st.markdown('<div class="geo-card" style="text-align:center;color:#9ca3af;padding:2rem;">'
-                    'Report not generated.</div>', unsafe_allow_html=True)
-    else:
-        first_s = report.find("## 1.")
-        if first_s == -1: first_s = report.find("## ")
-        report_body = report[first_s:] if first_s != -1 else report
-        fm = re.search(r'\n={10,}\s*\nConfidence:', report_body)
-        if fm: report_body = report_body[:fm.start()].strip()
-        else:  report_body = re.sub(r'\n={10,}.*$','',report_body,flags=re.DOTALL).strip()
-
-        sections = parse_report_sections(report_body)
-        if sections:
-            for title, content in sections.items():
-                render_report_section(title, content, get_icon(title))
-        else:
-            st.markdown(f'<div class="report-section" style="white-space:pre-wrap;">{report}</div>',
-                        unsafe_allow_html=True)
-
-    st.markdown("<hr class='geo-divider'>", unsafe_allow_html=True)
-
-    # ── Download buttons ──────────────────────────────────────────────────────
-    st.markdown("## ⬇ Download Report")
+    # Downloads
+    st.markdown("## Download Report")
     dl_col1, dl_col2, _ = st.columns([1, 1, 2])
 
     with dl_col1:
-        st.download_button(
-            label="⬇ Download (.txt)",
-            data=report or "",
-            file_name=f"geointel_{region_str.replace(' ','_').replace(',','')}.txt",
-            mime="text/plain",
-        )
+        if report:
+            st.download_button(
+                label="⬇ Download TXT",
+                data=report,
+                file_name="geointel_" + region_str.replace(" ","_").replace(",","") + ".txt",
+                mime="text/plain",
+            )
 
     with dl_col2:
-        with st.spinner("Building PDF…"):
-            try:
-                pdf_bytes = generate_pdf_report(
-                    ic=ic,
-                    report_text=report,
-                    ndvi_map=ndvi_map, ndwi_map=ndwi_map, ndbi_map=ndbi_map,
-                    land_cover=land_cover,
-                    delta=delta, ndvi_t1_val=ndvi_t1_val, ndvi_t2_val=ndvi_t2_val,
-                    t1_label=t1_label, t2_label=t2_label,
-                    delta_map=delta_map, ts_df=ts_df, ts_trend=ts_trend,
-                )
-                st.download_button(
-                    label="⬇ Download (.pdf)",
-                    data=pdf_bytes,
-                    file_name=f"geointel_{region_str.replace(' ','_').replace(',','')}.pdf",
-                    mime="application/pdf",
-                )
-            except Exception as pdf_err:
-                st.warning(f"PDF generation failed: {pdf_err}")
-                st.caption("The .txt download above is still available.")
+        try:
+            pdf_bytes = generate_pdf_report(
+                ic, report, ndvi_map, ndwi_map, ndbi_map,
+                land_cover, delta, ndvi_t1_val, ndvi_t2_val,
+                t1_label, t2_label, delta_map, ts_df, ts_trend,
+            )
+            st.download_button(
+                label="⬇ Download PDF",
+                data=pdf_bytes,
+                file_name="geointel_" + region_str.replace(" ","_").replace(",","") + ".pdf",
+                mime="application/pdf",
+            )
+        except Exception as pdf_err:
+            st.caption("PDF generation failed: " + str(pdf_err) + " — install reportlab to enable PDF export.")
